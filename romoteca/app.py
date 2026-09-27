@@ -338,9 +338,24 @@ class RomotecaApp(tk.Tk):
             return
         window = self.online_window = tk.Toplevel(self)
         window.title(self.tr("download_online"))
-        window.geometry("620x180")
+        saved_geometry = self.settings.get("online_window_geometry")
+        if saved_geometry:
+            window.geometry(saved_geometry)
+        else:
+            self.update_idletasks()
+            x = max(self.winfo_x() + (self.winfo_width() - 620) // 2, 0)
+            y = max(self.winfo_y() + (self.winfo_height() - 180) // 2, 0)
+            window.geometry(f"620x180+{x}+{y}")
         window.transient(self)
         window.grab_set()
+
+        def close_online_window() -> None:
+            self.settings["online_window_geometry"] = window.geometry()
+            save_settings(self.settings)
+            window.grab_release()
+            window.destroy()
+
+        window.protocol("WM_DELETE_WINDOW", close_online_window)
         frame = ttk.Frame(window, padding=14)
         frame.pack(fill="both", expand=True)
         source_var = tk.StringVar(value="Redump (official HTTPS)")
@@ -639,6 +654,8 @@ class RomotecaApp(tk.Tk):
                 elif event[0] == "online_complete":
                     path, window = event[1], event[2]
                     if window.winfo_exists():
+                        self.settings["online_window_geometry"] = window.geometry()
+                        save_settings(self.settings)
                         window.grab_release()
                         window.destroy()
                     self._add_catalog(path)

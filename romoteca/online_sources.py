@@ -117,6 +117,8 @@ def download_dat(entry: OnlineDat, destination: Path) -> Path:
                 stripped = content.lstrip()
         except zipfile.BadZipFile as exc:
             raise ValueError("La descarga ZIP no es válida.") from exc
+    if stripped.startswith(b"\xef\xbb\xbf"):
+        stripped = stripped[3:].lstrip()
     if not stripped.startswith(b"<"):
         raise ValueError("La descarga no parece un DAT/XML válido.")
     destination.parent.mkdir(parents=True, exist_ok=True)
