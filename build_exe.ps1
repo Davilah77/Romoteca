@@ -11,5 +11,10 @@ py -m PyInstaller `
     --version-file packaging\version_info.txt `
     main.py
 
-Write-Host "Ejecutable creado en: $projectRoot\dist\Romoteca.exe"
+$datDirectory = Join-Path $projectRoot "dist\dats"
+New-Item -ItemType Directory -Force -Path $datDirectory | Out-Null
+Get-ChildItem -LiteralPath (Join-Path $projectRoot "dats") -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in ".dat", ".xml" } |
+    Copy-Item -Destination $datDirectory -Force
 
+Write-Host "Ejecutable creado en: $projectRoot\dist\Romoteca.exe"

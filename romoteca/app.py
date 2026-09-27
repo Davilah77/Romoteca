@@ -2,37 +2,71 @@ from __future__ import annotations
 
 import csv
 import queue
+import shutil
+import sys
 import threading
 import tkinter as tk
+from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__
 from .dat_parser import DatError, load_dat
-from .matcher import compare_catalog
-from .models import DatCatalog, GameResult, GameState, ScanSummary
+from .i18n import Translator
+from .matcher import compare_catalog, find_unknown_files
+from .models import DatCatalog, GameResult, GameState, ScanSummary, ScannedFile
 from .scanner import ScanCancelled, scan_folder
 from .settings import load_settings, save_settings
+
+
+@dataclass
+class CollectionSession:
+    catalog: DatCatalog
+    rom_folder: Path | None = None
+    results: list[GameResult] = field(default_factory=list)
+    unknown_files: list[ScannedFile] = field(default_factory=list)
+    summary: ScanSummary | None = None
+
+    @property
+    def key(self) -> str:
+        return self.catalog.source_path.name
+
+
+def application_directory() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
 
 
 class RomotecaApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title(f"Romoteca {__version__}")
-        self.geometry("1050x680")
-        self.minsize(820, 520)
-
-        self.catalog: DatCatalog | None = None
-        self.rom_folder: Path | None = None
-        self.results: list[GameResult] = []
-        self.summary: ScanSummary | None = None
+        self.settings = load_settings()
+        self.language = self.settings.get("language", "en")
+        self.tr = Translator(self.language)
+        self.collections: dict[str, CollectionSession] = {}
+        self.current_key: str | None = None
         self.events: queue.Queue[tuple] = queue.Queue()
         self.cancel_event = threading.Event()
-        self.settings = load_settings()
+        self.auto_bios = bool(self.settings.get("auto_bios", True))
+        stored_bios = self.settings.get("bios_folder")
+        self.manual_bios_folder = Path(stored_bios) if stored_bios else None
+        self.dats_directory = application_directory() / "dats"
+        self.dats_directory.mkdir(parents=True, exist_ok=True)
 
+        self.title(f"Romoteca {__version__}")
+        self.geometry("1180x720")
+        self.minsize(900, 560)
         self._configure_style()
+        self._create_icons()
         self._build_ui()
+        self._load_local_dats()
+        self._translate_ui()
         self.after(100, self._process_events)
+
+    @property
+    def current(self) -> CollectionSession | None:
+        return self.collections.get(self.current_key or "")
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
@@ -43,164 +77,352 @@ class RomotecaApp(tk.Tk):
         style.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
 
+    def _folder_icon(self, color: str) -> tk.PhotoImage:
+        image = tk.PhotoImage(width=18, height=16)
+        image.put("#000000", to=(1, 4, 17, 15))
+        image.put(color, to=(2, 5, 16, 14))
+        image.put("#000000", to=(3, 1, 10, 5))
+        image.put(color, to=(4, 2, 9, 5))
+        image.put("#ffffff", to=(3, 6, 15, 7))
+        return image
+
+    def _create_icons(self) -> None:
+        self.icons = {
+            "complete": self._folder_icon("#36a852"),
+            "partial": self._folder_icon("#f2b632"),
+            "missing": self._folder_icon("#d94a48"),
+            "unknown": self._folder_icon("#f2b632"),
+            "clone": self._folder_icon("#f3f3f3"),
+        }
+
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self, padding=16)
-        outer.pack(fill="both", expand=True)
+        self.menu_bar = tk.Menu(self)
+        self.configure(menu=self.menu_bar)
+        root = ttk.Frame(self, padding=(14, 10, 14, 0))
+        root.pack(fill="both", expand=True)
 
-        header = ttk.Frame(outer)
-        header.pack(fill="x")
+        header = ttk.Frame(root)
+        header.pack(fill="x", pady=(0, 10))
         ttk.Label(header, text="Romoteca", style="Title.TLabel").pack(side="left")
-        ttk.Label(
-            header, text="Inventario seguro de colecciones", style="Muted.TLabel"
-        ).pack(side="left", padx=(12, 0), pady=(7, 0))
+        self.subtitle_label = ttk.Label(header, style="Muted.TLabel")
+        self.subtitle_label.pack(side="left", padx=(12, 0), pady=(7, 0))
 
-        toolbar = ttk.Frame(outer, padding=(0, 14, 0, 10))
-        toolbar.pack(fill="x")
-        self.dat_button = ttk.Button(toolbar, text="Cargar DAT", command=self._choose_dat)
-        self.dat_button.pack(side="left")
-        self.folder_button = ttk.Button(
-            toolbar, text="Seleccionar carpeta", command=self._choose_folder
-        )
+        toolbar = ttk.Frame(root)
+        toolbar.pack(fill="x", pady=(0, 10))
+        self.import_button = ttk.Button(toolbar, command=self._import_dat)
+        self.import_button.pack(side="left")
+        self.folder_button = ttk.Button(toolbar, command=self._choose_rom_folder)
         self.folder_button.pack(side="left", padx=(8, 0))
-        self.scan_button = ttk.Button(
-            toolbar, text="Escanear", command=self._start_scan, state="disabled"
-        )
+        self.scan_button = ttk.Button(toolbar, command=self._start_scan, state="disabled")
         self.scan_button.pack(side="left", padx=(8, 0))
-        self.cancel_button = ttk.Button(
-            toolbar, text="Cancelar", command=self.cancel_event.set, state="disabled"
-        )
+        self.cancel_button = ttk.Button(toolbar, command=self.cancel_event.set, state="disabled")
         self.cancel_button.pack(side="left", padx=(8, 0))
-        self.export_button = ttk.Button(
-            toolbar, text="Exportar CSV", command=self._export_csv, state="disabled"
-        )
+        self.export_button = ttk.Button(toolbar, command=self._export_csv, state="disabled")
         self.export_button.pack(side="right")
 
-        info = ttk.LabelFrame(outer, text="Colección", padding=10)
-        info.pack(fill="x")
-        self.dat_var = tk.StringVar(value="DAT: sin seleccionar")
-        self.folder_var = tk.StringVar(value="Carpeta: sin seleccionar")
-        ttk.Label(info, textvariable=self.dat_var).pack(anchor="w")
-        ttk.Label(info, textvariable=self.folder_var, style="Muted.TLabel").pack(
-            anchor="w", pady=(4, 0)
-        )
+        pane = ttk.Panedwindow(root, orient="horizontal")
+        pane.pack(fill="both", expand=True)
+        self.left_panel = ttk.Frame(pane, width=290)
+        self.main_panel = ttk.Frame(pane)
+        pane.add(self.left_panel, weight=0)
+        pane.add(self.main_panel, weight=1)
 
-        filters = ttk.Frame(outer, padding=(0, 10, 0, 8))
+        self.collections_frame = ttk.LabelFrame(self.left_panel, padding=6)
+        self.collections_frame.pack(fill="both", expand=True)
+        self.collection_tree = ttk.Treeview(
+            self.collections_frame, columns=("name", "have"), show="headings",
+            selectmode="browse", height=20,
+        )
+        self.collection_tree.column("name", width=205)
+        self.collection_tree.column("have", width=65, anchor="center", stretch=False)
+        self.collection_tree.pack(fill="both", expand=True)
+        self.collection_tree.bind("<<TreeviewSelect>>", self._select_collection)
+
+        self.info_frame = ttk.LabelFrame(self.main_panel, padding=10)
+        self.info_frame.pack(fill="x", padx=(10, 0))
+        self.dat_var = tk.StringVar()
+        self.folder_var = tk.StringVar()
+        self.bios_var = tk.StringVar()
+        ttk.Label(self.info_frame, textvariable=self.dat_var).pack(anchor="w")
+        ttk.Label(self.info_frame, textvariable=self.folder_var, style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(self.info_frame, textvariable=self.bios_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+
+        filters = ttk.Frame(self.main_panel, padding=(10, 10, 0, 8))
         filters.pack(fill="x")
-        ttk.Label(filters, text="Mostrar:").pack(side="left")
-        self.filter_var = tk.StringVar(value="Todos")
-        filter_box = ttk.Combobox(
-            filters,
-            textvariable=self.filter_var,
-            values=("Todos", "Completos", "Incompletos", "Faltan"),
-            state="readonly",
-            width=16,
-        )
-        filter_box.pack(side="left", padx=(8, 0))
-        filter_box.bind("<<ComboboxSelected>>", lambda _event: self._fill_table())
+        self.show_label = ttk.Label(filters)
+        self.show_label.pack(side="left")
+        self.filter_var = tk.StringVar()
+        self.filter_box = ttk.Combobox(filters, textvariable=self.filter_var, state="readonly", width=17)
+        self.filter_box.pack(side="left", padx=(8, 0))
+        self.filter_box.bind("<<ComboboxSelected>>", lambda _event: self._fill_results())
 
-        self.tree = ttk.Treeview(
-            outer,
-            columns=("state", "game", "have", "detail"),
-            show="headings",
-            selectmode="browse",
+        table_frame = ttk.Frame(self.main_panel)
+        table_frame.pack(fill="both", expand=True, padx=(10, 0))
+        self.result_tree = ttk.Treeview(
+            table_frame, columns=("status", "game", "have", "detail"),
+            show="tree headings", selectmode="browse",
         )
-        self.tree.heading("state", text="Estado")
-        self.tree.heading("game", text="Juego")
-        self.tree.heading("have", text="Tengo")
-        self.tree.heading("detail", text="Detalle")
-        self.tree.column("state", width=110, stretch=False)
-        self.tree.column("game", width=430)
-        self.tree.column("have", width=80, anchor="center", stretch=False)
-        self.tree.column("detail", width=280)
-        self.tree.tag_configure("complete", foreground="#137333")
-        self.tree.tag_configure("partial", foreground="#a15c00")
-        self.tree.tag_configure("missing", foreground="#a61b1b")
-        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
-        self.tree.pack(side="left", fill="both", expand=True)
+        self.result_tree.column("#0", width=34, anchor="center", stretch=False)
+        self.result_tree.column("status", width=105, stretch=False)
+        self.result_tree.column("game", width=380)
+        self.result_tree.column("have", width=75, anchor="center", stretch=False)
+        self.result_tree.column("detail", width=300)
+        self.result_tree.tag_configure("complete", foreground="#137333")
+        self.result_tree.tag_configure("partial", foreground="#9a6200")
+        self.result_tree.tag_configure("missing", foreground="#b42318")
+        self.result_tree.tag_configure("unknown", foreground="#9a6200")
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.result_tree.yview)
+        self.result_tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
+        self.result_tree.pack(side="left", fill="both", expand=True)
 
-        self.status_var = tk.StringVar(value="Carga un DAT y selecciona una carpeta.")
-        self.status = ttk.Label(self, textvariable=self.status_var, padding=(16, 8))
+        legend = ttk.Frame(self.main_panel, padding=(10, 8, 0, 6))
+        legend.pack(fill="x")
+        self.legend_title = ttk.Label(legend)
+        self.legend_title.pack(side="left", padx=(0, 8))
+        self.legend_labels: dict[str, ttk.Label] = {}
+        for key in ("complete", "partial", "missing", "clone"):
+            ttk.Label(legend, image=self.icons[key]).pack(side="left", padx=(8, 3))
+            label = ttk.Label(legend)
+            label.pack(side="left")
+            self.legend_labels[key] = label
+
+        self.status_var = tk.StringVar()
+        self.status = ttk.Label(self, textvariable=self.status_var, padding=(14, 7))
         self.status.pack(side="bottom", fill="x")
         self.progress = ttk.Progressbar(self, mode="determinate")
-        self.progress.pack(side="bottom", fill="x")
 
-    def _choose_dat(self) -> None:
-        selected = filedialog.askopenfilename(
-            title="Seleccionar archivo DAT",
-            filetypes=(("Archivos DAT/XML", "*.dat *.xml"), ("Todos", "*.*")),
-        )
-        if not selected:
-            return
-        try:
-            self.catalog = load_dat(selected)
-        except DatError as exc:
-            messagebox.showerror("DAT no válido", str(exc), parent=self)
-            return
-        version = f" · {self.catalog.version}" if self.catalog.version else ""
-        self.dat_var.set(
-            f"DAT: {self.catalog.name}{version} · "
-            f"{len(self.catalog.games):,} juegos · {self.catalog.asset_count:,} archivos"
-        )
-        self.results.clear()
-        self._fill_table()
-        self._update_scan_button()
-        self.status_var.set("DAT cargado. Selecciona una carpeta o inicia el escaneo.")
+    def _build_menu(self) -> None:
+        self.menu_bar.delete(0, "end")
+        file_menu = tk.Menu(self.menu_bar, tearoff=False)
+        file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
+        file_menu.add_command(label=self.tr("select_roms"), command=self._choose_rom_folder)
+        file_menu.add_command(label=self.tr("scan"), command=self._start_scan)
+        file_menu.add_separator()
+        file_menu.add_command(label=self.tr("export"), command=self._export_csv)
+        file_menu.add_separator()
+        file_menu.add_command(label=self.tr("exit"), command=self.destroy)
+        self.menu_bar.add_cascade(label=self.tr("file"), menu=file_menu)
 
-    def _choose_folder(self) -> None:
-        initial = self.settings.get("last_rom_folder") or str(Path.home())
-        selected = filedialog.askdirectory(
-            title="Seleccionar carpeta de ROMs", initialdir=initial, mustexist=True
-        )
-        if not selected:
-            return
-        self.rom_folder = Path(selected)
-        self.folder_var.set(f"Carpeta: {self.rom_folder}")
-        self.settings["last_rom_folder"] = str(self.rom_folder)
+        settings_menu = tk.Menu(self.menu_bar, tearoff=False)
+        settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
+        self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
+        settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
+        self.menu_bar.add_cascade(label=self.tr("settings"), menu=settings_menu)
+
+        language_menu = tk.Menu(self.menu_bar, tearoff=False)
+        self.language_var = tk.StringVar(value=self.language)
+        language_menu.add_radiobutton(label="English", value="en", variable=self.language_var, command=lambda: self._change_language("en"))
+        language_menu.add_radiobutton(label="Español", value="es", variable=self.language_var, command=lambda: self._change_language("es"))
+        self.menu_bar.add_cascade(label=self.tr("language"), menu=language_menu)
+
+        help_menu = tk.Menu(self.menu_bar, tearoff=False)
+        help_menu.add_command(label=self.tr("about"), command=self._show_about)
+        self.menu_bar.add_cascade(label=self.tr("help"), menu=help_menu)
+
+    def _translate_ui(self) -> None:
+        self._build_menu()
+        self.subtitle_label.configure(text=self.tr("app_subtitle"))
+        self.import_button.configure(text=self.tr("import_dat"))
+        self.folder_button.configure(text=self.tr("select_roms"))
+        self.scan_button.configure(text=self.tr("scan"))
+        self.cancel_button.configure(text="Cancelar" if self.language == "es" else "Cancel")
+        self.export_button.configure(text=self.tr("export"))
+        self.collections_frame.configure(text=self.tr("collections"))
+        self.info_frame.configure(text=self.tr("collection"))
+        self.collection_tree.heading("name", text=self.tr("name"))
+        self.collection_tree.heading("have", text=self.tr("have"))
+        self.show_label.configure(text=self.tr("show"))
+        filters = (self.tr("all"), self.tr("complete_plural"), self.tr("partial_plural"), self.tr("missing_plural"), self.tr("unknown_plural"))
+        self.filter_box.configure(values=filters)
+        self.filter_var.set(filters[0])
+        self.result_tree.heading("#0", text="")
+        self.result_tree.heading("status", text=self.tr("status"))
+        self.result_tree.heading("game", text=self.tr("game"))
+        self.result_tree.heading("have", text=self.tr("have"))
+        self.result_tree.heading("detail", text=self.tr("detail"))
+        self.legend_title.configure(text=self.tr("legend"))
+        for key, label in self.legend_labels.items():
+            label.configure(text=self.tr(key))
+        self._show_current_info()
+        self._fill_results()
+        if not self.current:
+            self.status_var.set(self.tr("ready"))
+
+    def _change_language(self, language: str) -> None:
+        self.language = language
+        self.tr.set_language(language)
+        self.settings["language"] = language
         save_settings(self.settings)
-        self._update_scan_button()
-        self.status_var.set("Carpeta seleccionada. Pulsa Escanear cuando quieras.")
+        self._translate_ui()
 
-    def _update_scan_button(self) -> None:
-        state = "normal" if self.catalog and self.rom_folder else "disabled"
-        self.scan_button.configure(state=state)
+    def _show_about(self) -> None:
+        messagebox.showinfo(self.tr("about"), self.tr("about_text", version=__version__), parent=self)
+
+    def _load_local_dats(self) -> None:
+        paths = sorted((*self.dats_directory.glob("*.dat"), *self.dats_directory.glob("*.xml")))
+        for path in paths:
+            self._add_catalog(path, show_errors=False)
+        if self.collections and not self.current_key:
+            first = next(iter(self.collections))
+            self.collection_tree.selection_set(first)
+            self.collection_tree.focus(first)
+            self._activate_collection(first)
+
+    def _add_catalog(self, path: Path, show_errors: bool = True) -> None:
+        try:
+            catalog = load_dat(path)
+        except DatError as exc:
+            if show_errors:
+                messagebox.showerror(self.tr("dat_error"), str(exc), parent=self)
+            return
+        folders = self.settings.setdefault("collection_folders", {})
+        stored = folders.get(path.name)
+        session = CollectionSession(catalog=catalog, rom_folder=Path(stored) if stored else None)
+        self.collections[path.name] = session
+        if self.collection_tree.exists(path.name):
+            self.collection_tree.delete(path.name)
+        self.collection_tree.insert("", "end", iid=path.name, values=(catalog.name, "—"))
+
+    def _import_dat(self) -> None:
+        selected = filedialog.askopenfilename(title=self.tr("choose_dat"), filetypes=(("DAT/XML", "*.dat *.xml"), ("All files", "*.*")))
+        if not selected:
+            return
+        source = Path(selected)
+        destination = self.dats_directory / source.name
+        try:
+            if source.resolve() != destination.resolve():
+                shutil.copy2(source, destination)
+            self._add_catalog(destination)
+        except OSError as exc:
+            messagebox.showerror(self.tr("dat_error"), str(exc), parent=self)
+            return
+        self.collection_tree.selection_set(destination.name)
+        self.collection_tree.focus(destination.name)
+        self._activate_collection(destination.name)
+
+    def _select_collection(self, _event=None) -> None:
+        selected = self.collection_tree.selection()
+        if selected:
+            self._activate_collection(selected[0])
+
+    def _activate_collection(self, key: str) -> None:
+        self.current_key = key
+        self._show_current_info()
+        self._fill_results()
+        self._update_buttons()
+        self.status_var.set(self.tr("scan_ready"))
+
+    def _show_current_info(self) -> None:
+        current = self.current
+        if not current:
+            self.dat_var.set(self.tr("dat_none"))
+            self.folder_var.set(self.tr("folder_none"))
+            self.bios_var.set(self.tr("bios_none"))
+            return
+        catalog = current.catalog
+        version = f" · {catalog.version}" if catalog.version else ""
+        self.dat_var.set(f"DAT: {catalog.name}{version} · {len(catalog.games):,} {self.tr('game').lower()}")
+        self.folder_var.set(("Carpeta de ROMs: " if self.language == "es" else "ROM folder: ") + (str(current.rom_folder) if current.rom_folder else self.tr("folder_none").split(": ", 1)[-1]))
+        bios = self._effective_bios_folder(current.rom_folder)
+        self.bios_var.set(f"BIOS: {bios}" if bios else self.tr("bios_none"))
+
+    def _choose_rom_folder(self) -> None:
+        current = self.current
+        if not current:
+            return
+        initial = current.rom_folder or self.settings.get("last_rom_folder") or Path.home()
+        selected = filedialog.askdirectory(title=self.tr("choose_roms"), initialdir=str(initial), mustexist=True)
+        if not selected:
+            return
+        current.rom_folder = Path(selected)
+        self.settings["last_rom_folder"] = selected
+        self.settings.setdefault("collection_folders", {})[current.key] = selected
+        save_settings(self.settings)
+        self._show_current_info()
+        self._update_buttons()
+        self.status_var.set(self.tr("folder_selected"))
+
+    def _choose_bios_folder(self) -> None:
+        initial = self.manual_bios_folder or Path.home()
+        selected = filedialog.askdirectory(title=self.tr("choose_bios"), initialdir=str(initial), mustexist=True)
+        if not selected:
+            return
+        self.manual_bios_folder = Path(selected)
+        self.auto_bios = False
+        self.settings["bios_folder"] = selected
+        self.settings["auto_bios"] = False
+        save_settings(self.settings)
+        self._show_current_info()
+
+    def _toggle_auto_bios(self) -> None:
+        self.auto_bios = bool(self.auto_bios_var.get())
+        self.settings["auto_bios"] = self.auto_bios
+        save_settings(self.settings)
+        self._show_current_info()
+
+    def _effective_bios_folder(self, rom_folder: Path | None) -> Path | None:
+        if self.auto_bios and rom_folder:
+            roms_parent = rom_folder.parent
+            if roms_parent.name.lower() == "roms":
+                candidate = roms_parent.parent / "bios"
+                if candidate.is_dir():
+                    return candidate
+        if self.manual_bios_folder and self.manual_bios_folder.is_dir():
+            return self.manual_bios_folder
+        return None
+
+    def _update_buttons(self) -> None:
+        current = self.current
+        self.scan_button.configure(state="normal" if current and current.rom_folder else "disabled")
+        self.folder_button.configure(state="normal" if current else "disabled")
+        self.export_button.configure(state="normal" if current and current.results else "disabled")
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
-        self.dat_button.configure(state=state)
+        self.import_button.configure(state=state)
         self.folder_button.configure(state=state)
         self.scan_button.configure(state="disabled" if busy else "normal")
         self.cancel_button.configure(state="normal" if busy else "disabled")
-        if not busy:
-            self._update_scan_button()
+        if busy:
+            self.progress.configure(value=0, maximum=100)
+            self.progress.pack(side="bottom", fill="x")
+        else:
+            self.progress.pack_forget()
+            self.progress.configure(value=0)
+            self._update_buttons()
 
     def _start_scan(self) -> None:
-        if not self.catalog or not self.rom_folder:
+        current = self.current
+        if not current or not current.rom_folder:
             return
         self.cancel_event.clear()
-        self.progress.configure(value=0, maximum=100)
         self._set_busy(True)
-        self.status_var.set("Preparando el escaneo…")
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        self.status_var.set(self.tr("preparing"))
+        threading.Thread(target=self._scan_worker, args=(current.key,), daemon=True).start()
 
-    def _scan_worker(self) -> None:
-        assert self.catalog and self.rom_folder
-
+    def _scan_worker(self, key: str) -> None:
+        session = self.collections[key]
+        assert session.rom_folder
         def progress(current: int, total: int, name: str) -> None:
             self.events.put(("progress", current, total, name))
-
         try:
-            scanned = scan_folder(
-                self.rom_folder,
-                progress=progress,
-                cancelled=self.cancel_event.is_set,
+            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set)
+            scanned = list(rom_scanned)
+            needs_bios = any(
+                "[bios]" in (game.name + " " + game.description).lower()
+                for game in session.catalog.games
             )
-            results, summary = compare_catalog(self.catalog, scanned)
-            self.events.put(("complete", results, summary))
+            bios = self._effective_bios_folder(session.rom_folder) if needs_bios else None
+            if bios and bios.resolve() != session.rom_folder.resolve():
+                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set))
+            results, summary = compare_catalog(session.catalog, scanned)
+            # BIOS files belonging to other systems should not appear as unknown ROMs.
+            unknown = find_unknown_files(results, rom_scanned)
+            self.events.put(("complete", key, results, summary, unknown))
         except ScanCancelled:
             self.events.put(("cancelled",))
-        except Exception as exc:  # Keep worker failures inside the GUI.
+        except Exception as exc:
             self.events.put(("error", str(exc)))
 
     def _process_events(self) -> None:
@@ -210,107 +432,93 @@ class RomotecaApp(tk.Tk):
                 if event[0] == "progress":
                     _, current, total, name = event
                     self.progress.configure(maximum=max(total, 1), value=current)
-                    self.status_var.set(f"Escaneando {current:,}/{total:,}: {name}")
+                    self.status_var.set(self.tr("scanning", current=current, total=total, name=name))
                 elif event[0] == "complete":
-                    _, self.results, self.summary = event
+                    _, key, results, summary, unknown = event
+                    session = self.collections[key]
+                    session.results, session.summary, session.unknown_files = results, summary, unknown
                     self._set_busy(False)
-                    self._fill_table()
-                    self.export_button.configure(state="normal")
-                    self._show_summary()
+                    self._update_collection_row(session)
+                    if key == self.current_key:
+                        self._fill_results()
+                        self._show_summary(session)
                 elif event[0] == "cancelled":
                     self._set_busy(False)
-                    self.status_var.set("Escaneo cancelado. No se ha modificado ningún archivo.")
+                    self.status_var.set(self.tr("cancelled"))
                 elif event[0] == "error":
                     self._set_busy(False)
-                    messagebox.showerror("Error durante el escaneo", event[1], parent=self)
-                    self.status_var.set("No se pudo completar el escaneo.")
+                    messagebox.showerror(self.tr("scan_error"), event[1], parent=self)
+                    self.status_var.set(self.tr("scan_failed"))
         except queue.Empty:
             pass
         self.after(100, self._process_events)
 
-    def _show_summary(self) -> None:
-        if not self.summary:
-            return
-        total = self.summary.complete + self.summary.partial + self.summary.missing
-        percent = (self.summary.complete / total * 100) if total else 0
-        self.status_var.set(
-            f"Completos {self.summary.complete:,}/{total:,} ({percent:.1f} %) · "
-            f"Incompletos {self.summary.partial:,} · Faltan {self.summary.missing:,} · "
-            f"No identificados {self.summary.unknown:,} · "
-            f"Sin verificar {self.summary.unverified_containers:,}"
-        )
+    def _update_collection_row(self, session: CollectionSession) -> None:
+        if session.summary:
+            total = session.summary.complete + session.summary.partial + session.summary.missing
+            have = session.summary.complete + session.summary.partial
+            self.collection_tree.item(session.key, values=(session.catalog.name, f"{have}/{total}"))
 
-    def _fill_table(self) -> None:
-        self.tree.delete(*self.tree.get_children())
-        selected_filter = self.filter_var.get()
-        allowed = {
-            "Completos": GameState.COMPLETE,
-            "Incompletos": GameState.PARTIAL,
-            "Faltan": GameState.MISSING,
-        }.get(selected_filter)
-        for result in self.results:
-            if allowed and result.state != allowed:
+    def _show_summary(self, session: CollectionSession) -> None:
+        summary = session.summary
+        if not summary:
+            return
+        total = summary.complete + summary.partial + summary.missing
+        percent = (summary.complete / total * 100) if total else 0
+        self.status_var.set(f"{self.tr('complete_plural')} {summary.complete:,}/{total:,} ({percent:.1f} %) · {self.tr('partial_plural')} {summary.partial:,} · {self.tr('missing_plural')} {summary.missing:,} · {self.tr('unknown_plural')} {summary.unknown:,}")
+
+    def _filter_state(self) -> str:
+        return {self.tr("all"): "all", self.tr("complete_plural"): "complete", self.tr("partial_plural"): "partial", self.tr("missing_plural"): "missing", self.tr("unknown_plural"): "unknown"}.get(self.filter_var.get(), "all")
+
+    def _fill_results(self) -> None:
+        if not hasattr(self, "result_tree"):
+            return
+        self.result_tree.delete(*self.result_tree.get_children())
+        session = self.current
+        if not session:
+            return
+        selected = self._filter_state()
+        for result in session.results:
+            key = {GameState.COMPLETE: "complete", GameState.PARTIAL: "partial", GameState.MISSING: "missing"}[result.state]
+            if selected not in ("all", key):
                 continue
+            clone = result.game.clone_of is not None and result.state == GameState.COMPLETE
+            icon_key = "clone" if clone else key
+            status_key = "clone" if clone else key
             detail = ""
             if result.matches:
                 first = result.matches[0]
-                detail = first.path.name
-                if first.archive_member:
-                    detail += f" › {first.archive_member}"
-            tag = {
-                GameState.COMPLETE: "complete",
-                GameState.PARTIAL: "partial",
-                GameState.MISSING: "missing",
-            }[result.state]
-            self.tree.insert(
-                "",
-                "end",
-                values=(
-                    result.state.value,
-                    result.game.description,
-                    f"{result.found_assets}/{result.expected_assets}",
-                    detail,
-                ),
-                tags=(tag,),
-            )
+                detail = first.path.name + (f" › {first.archive_member}" if first.archive_member else "")
+            self.result_tree.insert("", "end", image=self.icons[icon_key], values=(self.tr(status_key), result.game.description, f"{result.found_assets}/{result.expected_assets}", detail), tags=(key,))
+        if selected in ("all", "unknown"):
+            for item in session.unknown_files:
+                detail = str(item.path) + (f" › {item.archive_member}" if item.archive_member else "")
+                self.result_tree.insert("", "end", image=self.icons["unknown"], values=(self.tr("unknown"), item.display_name, "—", detail), tags=("unknown",))
 
     def _export_csv(self) -> None:
-        if not self.results:
+        session = self.current
+        if not session or not session.results:
             return
-        selected = filedialog.asksaveasfilename(
-            title="Guardar informe",
-            defaultextension=".csv",
-            filetypes=(("CSV", "*.csv"),),
-            initialfile="informe_romoteca.csv",
-        )
+        selected = filedialog.asksaveasfilename(title=self.tr("export"), defaultextension=".csv", filetypes=(("CSV", "*.csv"),), initialfile="romoteca-report.csv")
         if not selected:
             return
         try:
             with open(selected, "w", newline="", encoding="utf-8-sig") as stream:
                 writer = csv.writer(stream, delimiter=";")
-                writer.writerow(("Estado", "Juego", "Encontrados", "Esperados", "Archivos"))
-                for result in self.results:
-                    files = " | ".join(
-                        str(match.path)
-                        + (f"::{match.archive_member}" if match.archive_member else "")
-                        for match in result.matches
-                    )
-                    writer.writerow(
-                        (
-                            result.state.value,
-                            result.game.description,
-                            result.found_assets,
-                            result.expected_assets,
-                            files,
-                        )
-                    )
+                writer.writerow((self.tr("status"), self.tr("game"), "Found", "Expected", "Files"))
+                for result in session.results:
+                    files = " | ".join(str(match.path) + (f"::{match.archive_member}" if match.archive_member else "") for match in result.matches)
+                    state_key = {
+                        GameState.COMPLETE: "complete",
+                        GameState.PARTIAL: "partial",
+                        GameState.MISSING: "missing",
+                    }[result.state]
+                    writer.writerow((self.tr(state_key), result.game.description, result.found_assets, result.expected_assets, files))
         except OSError as exc:
-            messagebox.showerror("No se pudo guardar", str(exc), parent=self)
+            messagebox.showerror(self.tr("scan_error"), str(exc), parent=self)
             return
-        self.status_var.set(f"Informe guardado en {selected}")
+        self.status_var.set(self.tr("report_saved", path=selected))
 
 
 def run() -> None:
-    app = RomotecaApp()
-    app.mainloop()
-
+    RomotecaApp().mainloop()

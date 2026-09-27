@@ -59,7 +59,14 @@ def load_dat(path: str | Path) -> DatCatalog:
                 )
             )
         if name and assets:
-            games.append(DatGame(name=name, description=game_description, assets=tuple(assets)))
+            games.append(
+                DatGame(
+                    name=name,
+                    description=game_description,
+                    assets=tuple(assets),
+                    clone_of=(node.get("cloneof") or node.get("romof") or "").strip() or None,
+                )
+            )
 
     if not games:
         raise DatError("El archivo no contiene entradas game/machine con ROMs o discos.")
@@ -71,4 +78,3 @@ def load_dat(path: str | Path) -> DatCatalog:
         source_path=source,
         games=tuple(games),
     )
-

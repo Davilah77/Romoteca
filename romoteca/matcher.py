@@ -61,3 +61,9 @@ def compare_catalog(
     )
     return results, summary
 
+
+def find_unknown_files(
+    results: list[GameResult], scanned: list[ScannedFile]
+) -> list[ScannedFile]:
+    matched = {id(item) for result in results for item in result.matches}
+    return [item for item in scanned if item.verifiable and id(item) not in matched]

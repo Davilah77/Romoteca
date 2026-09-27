@@ -10,7 +10,7 @@ def settings_path() -> Path:
     return base / "Romoteca" / "settings.json"
 
 
-def load_settings() -> dict[str, str]:
+def load_settings() -> dict:
     path = settings_path()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -19,8 +19,7 @@ def load_settings() -> dict[str, str]:
         return {}
 
 
-def save_settings(settings: dict[str, str]) -> None:
+def save_settings(settings: dict) -> None:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
-

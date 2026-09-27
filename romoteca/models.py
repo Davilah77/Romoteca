@@ -23,6 +23,7 @@ class DatGame:
     name: str
     description: str
     assets: tuple[DatAsset, ...]
+    clone_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,4 +72,3 @@ class ScanSummary:
     missing: int
     unknown: int
     unverified_containers: int
-

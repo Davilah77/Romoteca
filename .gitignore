@@ -10,3 +10,6 @@ dist/
 settings.json
 *.log
 tmp*/
+dats/*.dat
+dats/*.xml
+!dats/.gitkeep

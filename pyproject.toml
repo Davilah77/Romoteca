@@ -1,6 +1,6 @@
 [project]
 name = "romoteca"
-version = "0.1"
+version = "0.2"
 description = "Inventario seguro y sencillo para colecciones de ROMs"
 requires-python = ">=3.11"
 license = { text = "MIT" }

@@ -25,12 +25,17 @@ class DatAndMatcherTests(unittest.TestCase):
     <description>Juego Dos</description>
     <rom name="dos.bin" size="8" crc="87654321" />
   </machine>
+  <machine name="juego-clon" cloneof="juego-dos">
+    <description>Juego Clon</description>
+    <rom name="clon.bin" size="2" crc="11223344" />
+  </machine>
 </datafile>""",
             encoding="utf-8",
         )
         catalog = load_dat(dat)
         self.assertEqual(catalog.name, "Prueba")
-        self.assertEqual(len(catalog.games), 2)
+        self.assertEqual(len(catalog.games), 3)
+        self.assertEqual(catalog.games[2].clone_of, "juego-dos")
 
         scanned = [
             ScannedFile(
@@ -45,7 +50,7 @@ class DatAndMatcherTests(unittest.TestCase):
         self.assertEqual(results[0].state, GameState.COMPLETE)
         self.assertEqual(results[1].state, GameState.MISSING)
         self.assertEqual(summary.complete, 1)
-        self.assertEqual(summary.missing, 1)
+        self.assertEqual(summary.missing, 2)
 
 
 if __name__ == "__main__":
