@@ -76,6 +76,7 @@ class RomotecaApp(tk.Tk):
         style.configure("Muted.TLabel", foreground="#5b6470")
         style.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
+        style.configure("Collection.Horizontal.TProgressbar", troughcolor="#e7edf3", background="#28a745", lightcolor="#28a745", darkcolor="#188038", thickness=14)
 
     def _folder_icon(self, color: str) -> tk.PhotoImage:
         image = tk.PhotoImage(width=18, height=16)
@@ -135,6 +136,8 @@ class RomotecaApp(tk.Tk):
         )
         self.collection_tree.column("name", width=205)
         self.collection_tree.column("have", width=65, anchor="center", stretch=False)
+        for tag, color in (("pending", "#30343b"), ("green", "#137333"), ("yellow", "#9a6200"), ("red", "#b42318")):
+            self.collection_tree.tag_configure(tag, foreground=color, font=("Segoe UI", 10, "bold"))
         self.collection_tree.pack(fill="both", expand=True)
         self.collection_tree.bind("<<TreeviewSelect>>", self._select_collection)
 
@@ -143,9 +146,19 @@ class RomotecaApp(tk.Tk):
         self.dat_var = tk.StringVar()
         self.folder_var = tk.StringVar()
         self.bios_var = tk.StringVar()
+        self.percent_var = tk.StringVar(value="—")
         ttk.Label(self.info_frame, textvariable=self.dat_var).pack(anchor="w")
         ttk.Label(self.info_frame, textvariable=self.folder_var, style="Muted.TLabel").pack(anchor="w", pady=(4, 0))
-        ttk.Label(self.info_frame, textvariable=self.bios_var, style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+        bios_line = ttk.Frame(self.info_frame)
+        bios_line.pack(fill="x", pady=(2, 0))
+        ttk.Label(bios_line, textvariable=self.bios_var, style="Muted.TLabel").pack(side="left")
+        self.bios_status_label = tk.Label(bios_line, text="?", font=("Segoe UI", 11, "bold"), fg="#6b7280")
+        self.bios_status_label.pack(side="left", padx=(8, 0))
+        percent_line = ttk.Frame(self.info_frame)
+        percent_line.pack(fill="x", pady=(8, 0))
+        self.collection_progress = ttk.Progressbar(percent_line, mode="determinate", maximum=100, style="Collection.Horizontal.TProgressbar")
+        self.collection_progress.pack(side="left", fill="x", expand=True)
+        ttk.Label(percent_line, textvariable=self.percent_var, width=18, anchor="e", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(10, 0))
 
         filters = ttk.Frame(self.main_panel, padding=(10, 10, 0, 8))
         filters.pack(fill="x")
@@ -282,7 +295,7 @@ class RomotecaApp(tk.Tk):
         self.collections[path.name] = session
         if self.collection_tree.exists(path.name):
             self.collection_tree.delete(path.name)
-        self.collection_tree.insert("", "end", iid=path.name, values=(catalog.name, "—"))
+        self.collection_tree.insert("", "end", iid=path.name, values=(catalog.name, "—"), tags=("pending",))
 
     def _import_dat(self) -> None:
         selected = filedialog.askopenfilename(title=self.tr("choose_dat"), filetypes=(("DAT/XML", "*.dat *.xml"), ("All files", "*.*")))
@@ -319,6 +332,8 @@ class RomotecaApp(tk.Tk):
             self.dat_var.set(self.tr("dat_none"))
             self.folder_var.set(self.tr("folder_none"))
             self.bios_var.set(self.tr("bios_none"))
+            self._set_bios_indicator("unknown")
+            self._update_collection_progress(None)
             return
         catalog = current.catalog
         version = f" · {catalog.version}" if catalog.version else ""
@@ -326,6 +341,39 @@ class RomotecaApp(tk.Tk):
         self.folder_var.set(("Carpeta de ROMs: " if self.language == "es" else "ROM folder: ") + (str(current.rom_folder) if current.rom_folder else self.tr("folder_none").split(": ", 1)[-1]))
         bios = self._effective_bios_folder(current.rom_folder)
         self.bios_var.set(f"BIOS: {bios}" if bios else self.tr("bios_none"))
+        self._set_bios_indicator(self._bios_state(current))
+        self._update_collection_progress(current)
+
+    def _set_bios_indicator(self, state: str) -> None:
+        symbols = {"ok": ("✓", "#137333"), "partial": ("⚠", "#b7791f"), "missing": ("✕", "#b42318"), "unknown": ("?", "#6b7280")}
+        symbol, color = symbols.get(state, symbols["unknown"])
+        self.bios_status_label.configure(text=symbol, fg=color)
+
+    def _bios_state(self, session: CollectionSession) -> str:
+        bios = [result for result in session.results if "[bios]" in (result.game.name + " " + result.game.description).lower()]
+        if not bios:
+            return "unknown"
+        if all(result.state == GameState.COMPLETE for result in bios):
+            return "ok"
+        if any(result.state == GameState.PARTIAL for result in bios) or any(result.state == GameState.COMPLETE for result in bios):
+            return "partial"
+        return "missing"
+
+    def _update_collection_progress(self, session: CollectionSession | None) -> None:
+        if not session or not session.summary:
+            self.collection_progress.configure(value=0)
+            self.percent_var.set("—")
+            return
+        summary = session.summary
+        total = summary.complete + summary.partial + summary.missing
+        percent = (summary.complete / total * 100) if total else 0
+        self.collection_progress.configure(value=percent)
+        self.percent_var.set(f"{percent:.1f}% ({summary.complete}/{total})")
+
+    @staticmethod
+    def _catalog_extensions(catalog: DatCatalog) -> set[str] | None:
+        extensions = {Path(asset.name).suffix.lower() for game in catalog.games for asset in game.assets}
+        return extensions or None
 
     def _choose_rom_folder(self) -> None:
         current = self.current
@@ -407,7 +455,8 @@ class RomotecaApp(tk.Tk):
         def progress(current: int, total: int, name: str) -> None:
             self.events.put(("progress", current, total, name))
         try:
-            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set)
+            allowed_extensions = self._catalog_extensions(session.catalog)
+            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions)
             scanned = list(rom_scanned)
             needs_bios = any(
                 "[bios]" in (game.name + " " + game.description).lower()
@@ -415,7 +464,7 @@ class RomotecaApp(tk.Tk):
             )
             bios = self._effective_bios_folder(session.rom_folder) if needs_bios else None
             if bios and bios.resolve() != session.rom_folder.resolve():
-                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set))
+                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions))
             results, summary = compare_catalog(session.catalog, scanned)
             # BIOS files belonging to other systems should not appear as unknown ROMs.
             unknown = find_unknown_files(results, rom_scanned)
@@ -441,6 +490,7 @@ class RomotecaApp(tk.Tk):
                     self._update_collection_row(session)
                     if key == self.current_key:
                         self._fill_results()
+                        self._show_current_info()
                         self._show_summary(session)
                 elif event[0] == "cancelled":
                     self._set_busy(False)
@@ -457,7 +507,8 @@ class RomotecaApp(tk.Tk):
         if session.summary:
             total = session.summary.complete + session.summary.partial + session.summary.missing
             have = session.summary.complete + session.summary.partial
-            self.collection_tree.item(session.key, values=(session.catalog.name, f"{have}/{total}"))
+            tag = "green" if total and have == total else ("yellow" if have else "red")
+            self.collection_tree.item(session.key, values=(session.catalog.name, f"{have}/{total}"), tags=(tag,))
 
     def _show_summary(self, session: CollectionSession) -> None:
         summary = session.summary

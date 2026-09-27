@@ -42,11 +42,14 @@ def _hash_file(path: Path, cancelled: Callable[[], bool]) -> tuple[str, str]:
     return f"{crc ^ 0xFFFFFFFF:08x}", sha1.hexdigest()
 
 
-def _scan_zip(path: Path) -> Iterable[ScannedFile]:
+def _scan_zip(path: Path, allowed_extensions: set[str] | None = None) -> Iterable[ScannedFile]:
     try:
         with zipfile.ZipFile(path) as archive:
             for info in archive.infolist():
                 if info.is_dir():
+                    continue
+                member_extension = Path(info.filename).suffix.lower()
+                if allowed_extensions is not None and member_extension not in allowed_extensions:
                     continue
                 yield ScannedFile(
                     path=path,
@@ -71,10 +74,18 @@ def scan_folder(
     folder: str | Path,
     progress: ProgressCallback | None = None,
     cancelled: Callable[[], bool] | None = None,
+    allowed_extensions: set[str] | None = None,
 ) -> list[ScannedFile]:
     root = Path(folder)
     is_cancelled = cancelled or (lambda: False)
-    paths = [path for path in root.rglob("*") if path.is_file()]
+    paths = [
+        path for path in root.rglob("*")
+        if path.is_file() and (
+            allowed_extensions is None
+            or path.suffix.lower() in allowed_extensions
+            or path.suffix.lower() == ".zip"
+        )
+    ]
     results: list[ScannedFile] = []
 
     for index, path in enumerate(paths, start=1):
@@ -84,7 +95,7 @@ def scan_folder(
             progress(index, len(paths), str(path.relative_to(root)))
         extension = path.suffix.lower()
         if extension == ".zip":
-            results.extend(_scan_zip(path))
+            results.extend(_scan_zip(path, allowed_extensions))
         elif extension in _UNVERIFIED_EXTENSIONS:
             results.append(
                 ScannedFile(
@@ -120,4 +131,3 @@ def scan_folder(
                     )
                 )
     return results
-
