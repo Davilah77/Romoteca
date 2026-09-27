@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -15,31 +16,16 @@ _UNVERIFIED_EXTENSIONS = {".chd", ".rar", ".7z"}
 class ScanCancelled(Exception):
     pass
 
-
-def _crc32_table() -> tuple[int, ...]:
-    values = []
-    for number in range(256):
-        crc = number
-        for _ in range(8):
-            crc = (crc >> 1) ^ (0xEDB88320 if crc & 1 else 0)
-        values.append(crc)
-    return tuple(values)
-
-
-_CRC_TABLE = _crc32_table()
-
-
 def _hash_file(path: Path, cancelled: Callable[[], bool]) -> tuple[str, str]:
-    crc = 0xFFFFFFFF
+    crc = 0
     sha1 = hashlib.sha1()
     with path.open("rb") as stream:
         while chunk := stream.read(1024 * 1024):
             if cancelled():
                 raise ScanCancelled()
             sha1.update(chunk)
-            for byte in chunk:
-                crc = _CRC_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
-    return f"{crc ^ 0xFFFFFFFF:08x}", sha1.hexdigest()
+            crc = zlib.crc32(chunk, crc)
+    return f"{crc & 0xFFFFFFFF:08x}", sha1.hexdigest()
 
 
 def _scan_zip(path: Path, allowed_extensions: set[str] | None = None) -> Iterable[ScannedFile]:
