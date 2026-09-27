@@ -19,6 +19,8 @@ incomplete or missing without altering the collection.
 - CHD, RAR and 7Z inventory without destructive extraction.
 - CSV report export.
 - Local DAT library. Third-party DAT files are not bundled.
+- Optional online DAT discovery from official Redump HTTPS downloads.
+- Community DAT Catalog support through HTTPS RAW files hosted on GitHub.
 
 Romoteca is open-source software released under the MIT License.
 

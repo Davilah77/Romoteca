@@ -15,6 +15,7 @@ from .dat_parser import DatError, load_dat
 from .i18n import Translator
 from .matcher import compare_catalog, find_unknown_files
 from .models import DatCatalog, GameResult, GameState, ScanSummary, ScannedFile
+from .online_sources import OnlineDat, download_dat, list_github_dats, list_redump_dats
 from .scanner import ScanCancelled, scan_folder
 from .settings import load_settings, save_settings
 
@@ -123,6 +124,8 @@ class RomotecaApp(tk.Tk):
         toolbar.pack(fill="x", pady=(0, 10))
         self.import_button = ttk.Button(toolbar, command=self._import_dat)
         self.import_button.pack(side="left")
+        self.online_button = ttk.Button(toolbar, command=self._download_online_dat)
+        self.online_button.pack(side="left", padx=(8, 0))
         self.folder_button = ttk.Button(toolbar, command=self._choose_rom_folder)
         self.folder_button.pack(side="left", padx=(8, 0))
         self.scan_button = ttk.Button(toolbar, command=self._start_scan, state="disabled")
@@ -220,6 +223,7 @@ class RomotecaApp(tk.Tk):
         self.menu_bar.delete(0, "end")
         file_menu = tk.Menu(self.menu_bar, tearoff=False)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
+        file_menu.add_command(label=self.tr("download_online"), command=self._download_online_dat)
         file_menu.add_command(label=self.tr("select_roms"), command=self._choose_rom_folder)
         file_menu.add_command(label=self.tr("scan"), command=self._start_scan)
         file_menu.add_separator()
@@ -248,6 +252,7 @@ class RomotecaApp(tk.Tk):
         self._build_menu()
         self.subtitle_label.configure(text=self.tr("app_subtitle"))
         self.import_button.configure(text=self.tr("import_dat"))
+        self.online_button.configure(text=self.tr("download_online"))
         self.folder_button.configure(text=self.tr("select_roms"))
         self.scan_button.configure(text=self.tr("scan"))
         self.cancel_button.configure(text="Cancelar" if self.language == "es" else "Cancel")
@@ -326,6 +331,75 @@ class RomotecaApp(tk.Tk):
         self.collection_tree.selection_set(destination.name)
         self.collection_tree.focus(destination.name)
         self._activate_collection(destination.name)
+
+    def _download_online_dat(self) -> None:
+        if getattr(self, "online_window", None) and self.online_window.winfo_exists():
+            self.online_window.lift()
+            return
+        window = self.online_window = tk.Toplevel(self)
+        window.title(self.tr("download_online"))
+        window.geometry("620x180")
+        window.transient(self)
+        window.grab_set()
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill="both", expand=True)
+        source_var = tk.StringVar(value="Redump (official HTTPS)")
+        platform_var = tk.StringVar()
+        status_var = tk.StringVar(value=self.tr("online_loading"))
+        ttk.Label(frame, text=self.tr("online_source")).grid(row=0, column=0, sticky="w", pady=4)
+        source_box = ttk.Combobox(frame, textvariable=source_var, state="readonly", values=("Redump (official HTTPS)", "GitHub DAT Catalog · Redump", "GitHub DAT Catalog · No-Intro", "GitHub DAT Catalog · TOSEC", "GitHub DAT Catalog · TOSEC-ISO"), width=42)
+        source_box.grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Label(frame, text=self.tr("online_platform")).grid(row=1, column=0, sticky="w", pady=4)
+        platform_box = ttk.Combobox(frame, textvariable=platform_var, state="readonly", width=42)
+        platform_box.grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Label(frame, textvariable=status_var, style="Muted.TLabel").grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 8))
+        download_button = ttk.Button(frame, text=self.tr("download"), state="disabled")
+        download_button.grid(row=3, column=1, sticky="e")
+        frame.columnconfigure(1, weight=1)
+        entries: list[OnlineDat] = []
+        window.online_entries = entries
+        window.online_status_var = status_var
+        window.online_platform_box = platform_box
+        window.online_download_button = download_button
+
+        def load_entries(selected: str) -> None:
+            try:
+                if selected.startswith("Redump"):
+                    loaded = list_redump_dats()
+                else:
+                    loaded = list_github_dats(selected.rsplit("· ", 1)[-1])
+                self.events.put(("online_loaded", loaded))
+            except Exception as exc:
+                self.events.put(("online_error", str(exc)))
+
+        def reload_entries(_event=None) -> None:
+            download_button.configure(state="disabled")
+            platform_box.configure(values=())
+            platform_var.set("")
+            status_var.set(self.tr("online_loading"))
+            threading.Thread(target=load_entries, args=(source_var.get(),), daemon=True).start()
+
+        def start_download() -> None:
+            selected = platform_var.get()
+            entry = next((item for item in getattr(window, "online_entries", []) if item.platform == selected), None)
+            if not entry:
+                return
+            download_button.configure(state="disabled")
+            status_var.set(self.tr("online_downloading"))
+            destination = self.dats_directory / entry.filename
+            if destination.exists():
+                destination = destination.with_name(f"{destination.stem} (online){destination.suffix}")
+            def worker() -> None:
+                try:
+                    path = download_dat(entry, destination)
+                    self.events.put(("online_complete", path, window))
+                except Exception as exc:
+                    self.events.put(("online_error", str(exc)))
+            threading.Thread(target=worker, daemon=True).start()
+
+        source_box.bind("<<ComboboxSelected>>", reload_entries)
+        download_button.configure(command=start_download)
+        self.after(50, reload_entries)
 
     def _select_collection(self, _event=None) -> None:
         selected = self.collection_tree.selection()
@@ -479,6 +553,7 @@ class RomotecaApp(tk.Tk):
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
         self.import_button.configure(state=state)
+        self.online_button.configure(state=state)
         self.folder_button.configure(state=state)
         self.scan_button.configure(state="disabled" if busy else "normal")
         self.cancel_button.configure(state="normal" if busy else "disabled")
@@ -550,6 +625,35 @@ class RomotecaApp(tk.Tk):
                     self._set_busy(False)
                     messagebox.showerror(self.tr("scan_error"), event[1], parent=self)
                     self.status_var.set(self.tr("scan_failed"))
+                elif event[0] == "online_loaded":
+                    window = getattr(self, "online_window", None)
+                    if window and window.winfo_exists():
+                        entries = event[1]
+                        window.online_entries = entries
+                        platforms = sorted({item.platform for item in entries})
+                        window.online_platform_box.configure(values=platforms)
+                        if platforms:
+                            window.online_platform_box.set(platforms[0])
+                            window.online_download_button.configure(state="normal")
+                        window.online_status_var.set(self.tr("online_ready", count=len(platforms)))
+                elif event[0] == "online_complete":
+                    path, window = event[1], event[2]
+                    if window.winfo_exists():
+                        window.grab_release()
+                        window.destroy()
+                    self._add_catalog(path)
+                    self.collection_tree.selection_set(path.name)
+                    self.collection_tree.focus(path.name)
+                    self._activate_collection(path.name)
+                    self.status_var.set(self.tr("online_saved", path=path.name))
+                elif event[0] == "online_error":
+                    window = getattr(self, "online_window", None)
+                    if window and window.winfo_exists():
+                        window.online_status_var.set(self.tr("online_failed"))
+                        window.online_download_button.configure(state="normal")
+                        messagebox.showerror(self.tr("online_error_title"), event[1], parent=window)
+                    else:
+                        messagebox.showerror(self.tr("online_error_title"), event[1], parent=self)
         except queue.Empty:
             pass
         self.after(100, self._process_events)
