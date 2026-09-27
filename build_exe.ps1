@@ -8,6 +8,8 @@ py -m PyInstaller `
     --onefile `
     --windowed `
     --name Romoteca `
+    --icon packaging\Romoteca.ico `
+    --add-data "packaging\Romoteca.ico;packaging" `
     --version-file packaging\version_info.txt `
     main.py
 

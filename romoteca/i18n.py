@@ -51,7 +51,7 @@ TRANSLATIONS = {
         "scan_error": "Error durante el escaneo",
         "scan_failed": "No se pudo completar el escaneo.",
         "report_saved": "Informe guardado en {path}",
-        "about_text": "Romoteca {version}\n\nInventario de ROMs seguro y de solo lectura.",
+        "about_text": "Romoteca {version}\n\nInventario de ROMs seguro y de solo lectura.\n\nCódigo abierto bajo licencia MIT.\nCreado por Davilah77.",
     },
     "en": {
         "app_subtitle": "Safe collection inventory",
@@ -102,7 +102,7 @@ TRANSLATIONS = {
         "scan_error": "Scan error",
         "scan_failed": "The scan could not be completed.",
         "report_saved": "Report saved to {path}",
-        "about_text": "Romoteca {version}\n\nSafe, read-only ROM inventory.",
+        "about_text": "Romoteca {version}\n\nSafe, read-only ROM inventory.\n\nOpen source software released under the MIT License.\nCreated by Davilah77.",
     },
 }
 
@@ -117,4 +117,3 @@ class Translator:
     def __call__(self, key: str, **values) -> str:
         text = TRANSLATIONS[self.language].get(key, key)
         return text.format(**values) if values else text
-

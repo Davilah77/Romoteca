@@ -4,6 +4,10 @@ Romoteca is a safe and straightforward desktop inventory for ROM collections.
 Load DAT catalogs, select your own folders and see which games are complete,
 incomplete or missing without altering the collection.
 
+![Romoteca](packaging/Romoteca.png)
+
+![Romoteca collection scan](docs/romoteca-0.2.1.png)
+
 ## Features
 
 - Read-only scanning: ROM files are never moved, renamed or deleted.
@@ -15,6 +19,8 @@ incomplete or missing without altering the collection.
 - CHD, RAR and 7Z inventory without destructive extraction.
 - CSV report export.
 - Local DAT library. Third-party DAT files are not bundled.
+
+Romoteca is open-source software released under the MIT License.
 
 ## Run from source
 

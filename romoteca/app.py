@@ -38,6 +38,11 @@ def application_directory() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def resource_path(name: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", application_directory()))
+    return base / name
+
+
 class RomotecaApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -55,6 +60,12 @@ class RomotecaApp(tk.Tk):
         self.dats_directory.mkdir(parents=True, exist_ok=True)
 
         self.title(f"Romoteca {__version__}")
+        icon = resource_path("packaging/Romoteca.ico")
+        if icon.is_file():
+            try:
+                self.iconbitmap(default=str(icon))
+            except tk.TclError:
+                pass
         self.geometry("1180x720")
         self.minsize(900, 560)
         self._configure_style()
@@ -292,10 +303,12 @@ class RomotecaApp(tk.Tk):
         folders = self.settings.setdefault("collection_folders", {})
         stored = folders.get(path.name)
         session = CollectionSession(catalog=catalog, rom_folder=Path(stored) if stored else None)
+        self._restore_session(session)
         self.collections[path.name] = session
         if self.collection_tree.exists(path.name):
             self.collection_tree.delete(path.name)
         self.collection_tree.insert("", "end", iid=path.name, values=(catalog.name, "—"), tags=("pending",))
+        self._update_collection_row(session)
 
     def _import_dat(self) -> None:
         selected = filedialog.askopenfilename(title=self.tr("choose_dat"), filetypes=(("DAT/XML", "*.dat *.xml"), ("All files", "*.*")))
@@ -384,12 +397,49 @@ class RomotecaApp(tk.Tk):
         if not selected:
             return
         current.rom_folder = Path(selected)
+        current.results = []
+        current.unknown_files = []
+        current.summary = None
         self.settings["last_rom_folder"] = selected
         self.settings.setdefault("collection_folders", {})[current.key] = selected
         save_settings(self.settings)
         self._show_current_info()
         self._update_buttons()
         self.status_var.set(self.tr("folder_selected"))
+
+    @staticmethod
+    def _scanned_to_dict(item: ScannedFile) -> dict:
+        return {"path": str(item.path), "display_name": item.display_name, "size": item.size, "crc": item.crc, "sha1": item.sha1, "archive_member": item.archive_member, "verifiable": item.verifiable}
+
+    @staticmethod
+    def _scanned_from_dict(data: dict) -> ScannedFile:
+        return ScannedFile(path=Path(data["path"]), display_name=data.get("display_name", Path(data["path"]).name), size=int(data.get("size", 0)), crc=data.get("crc"), sha1=data.get("sha1"), archive_member=data.get("archive_member"), verifiable=bool(data.get("verifiable", True)))
+
+    def _persist_session(self, session: CollectionSession) -> None:
+        cache = self.settings.setdefault("scan_cache", {})
+        cache[session.key] = {
+            "folder": str(session.rom_folder) if session.rom_folder else None,
+            "summary": session.summary.__dict__ if session.summary else None,
+            "results": [{"game": session.catalog.games.index(result.game), "state": result.state.value, "found": result.found_assets, "expected": result.expected_assets, "matches": [self._scanned_to_dict(item) for item in result.matches]} for result in session.results],
+            "unknown": [self._scanned_to_dict(item) for item in session.unknown_files],
+        }
+        save_settings(self.settings)
+
+    def _restore_session(self, session: CollectionSession) -> None:
+        cached = self.settings.get("scan_cache", {}).get(session.key)
+        if not isinstance(cached, dict):
+            return
+        try:
+            restored = []
+            for item in cached.get("results", []):
+                game = session.catalog.games[int(item["game"])]
+                restored.append(GameResult(game=game, state=GameState(item["state"]), found_assets=int(item["found"]), expected_assets=int(item["expected"]), matches=[self._scanned_from_dict(match) for match in item.get("matches", [])]))
+            summary = cached.get("summary")
+            session.results = restored
+            session.unknown_files = [self._scanned_from_dict(item) for item in cached.get("unknown", [])]
+            session.summary = ScanSummary(**summary) if summary else None
+        except (KeyError, TypeError, ValueError, IndexError):
+            session.results, session.unknown_files, session.summary = [], [], None
 
     def _choose_bios_folder(self) -> None:
         initial = self.manual_bios_folder or Path.home()
@@ -486,6 +536,7 @@ class RomotecaApp(tk.Tk):
                     _, key, results, summary, unknown = event
                     session = self.collections[key]
                     session.results, session.summary, session.unknown_files = results, summary, unknown
+                    self._persist_session(session)
                     self._set_busy(False)
                     self._update_collection_row(session)
                     if key == self.current_key:
