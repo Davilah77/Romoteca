@@ -60,6 +60,7 @@ class RomotecaApp(tk.Tk):
         self.theme_mode = self.settings.get("theme_mode", "system")
         self.dark_mode = self._theme_is_dark(self.theme_mode)
         self.scan_workers = self.settings.get("scan_workers", "auto")
+        self.chdman_path = self.settings.get("chdman_path")
         self.collections: dict[str, CollectionSession] = {}
         self.current_key: str | None = None
         self.events: queue.Queue[tuple] = queue.Queue()
@@ -108,10 +109,35 @@ class RomotecaApp(tk.Tk):
             return
         try:
             import ctypes
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            value = ctypes.c_int(1 if self.dark_mode else 0)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
-        except (AttributeError, OSError):
+            self.update_idletasks()
+            hwnd = self.winfo_id()
+            root_hwnd = ctypes.windll.user32.GetAncestor(hwnd, 2) or ctypes.windll.user32.GetParent(hwnd) or hwnd
+            use_dark = ctypes.c_int(1 if self.dark_mode else 0)
+            # Windows 10 uses attribute 19 on some builds, while Windows 11
+            # and newer builds use attribute 20.
+            for target in {hwnd, root_hwnd}:
+                for attribute in (19, 20):
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(target, attribute, ctypes.byref(use_dark), ctypes.sizeof(use_dark))
+            # Explicit caption colours keep the title bar consistent even
+            # when Windows is configured with a light system theme.
+            caption = ctypes.c_uint(0x00242120 if self.dark_mode else 0x00F0F0F0)
+            text = ctypes.c_uint(0x00F4F3F1 if self.dark_mode else 0x00242120)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(root_hwnd, 35, ctypes.byref(caption), ctypes.sizeof(caption))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(root_hwnd, 36, ctypes.byref(text), ctypes.sizeof(text))
+            # Ask Windows to repaint the non-client frame immediately. Without
+            # this, some builds only apply the new caption colour after resize.
+            flags = 0x0001 | 0x0002 | 0x0004 | 0x0020  # NOSIZE | NOMOVE | NOZORDER | FRAMECHANGED
+            ctypes.windll.user32.SetWindowPos(root_hwnd, 0, 0, 0, 0, 0, flags)
+            ctypes.windll.user32.InvalidateRect(root_hwnd, None, True)
+            ctypes.windll.user32.UpdateWindow(root_hwnd)
+            ctypes.windll.user32.SendMessageW(root_hwnd, 0x031A, 0, 0)  # WM_THEMECHANGED
+            ctypes.windll.user32.SendMessageW(root_hwnd, 0x0085, 0, 0)  # WM_NCPAINT
+            # Toggle the non-client activation state so DWM applies the new
+            # caption colour immediately, including when the window stays focused.
+            ctypes.windll.user32.SendMessageW(root_hwnd, 0x0086, 0, -1)  # WM_NCACTIVATE(false)
+            ctypes.windll.user32.SendMessageW(root_hwnd, 0x0086, 1, -1)  # WM_NCACTIVATE(true)
+            ctypes.windll.user32.RedrawWindow(root_hwnd, None, None, 0x0400 | 0x0100 | 0x0001)
+        except (AttributeError, OSError, TypeError):
             pass
 
     def _close_app(self) -> None:
@@ -197,6 +223,7 @@ class RomotecaApp(tk.Tk):
             "partial": self._folder_icon("#f2b632"),
             "missing": self._folder_icon("#d94a48"),
             "unknown": self._folder_icon("#f2b632"),
+            "modified": self._folder_icon("#d98b2b"),
             "clone": self._folder_icon("#f3f3f3"),
         }
 
@@ -292,6 +319,7 @@ class RomotecaApp(tk.Tk):
         self.result_tree.tag_configure("partial", foreground="#9a6200")
         self.result_tree.tag_configure("missing", foreground="#b42318")
         self.result_tree.tag_configure("unknown", foreground="#9a6200")
+        self.result_tree.tag_configure("modified", foreground="#c56a00")
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.result_tree.yview)
         self.result_tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
@@ -302,7 +330,7 @@ class RomotecaApp(tk.Tk):
         self.legend_title = ttk.Label(legend)
         self.legend_title.pack(side="left", padx=(0, 8))
         self.legend_labels: dict[str, ttk.Label] = {}
-        for key in ("complete", "partial", "missing", "clone"):
+        for key in ("complete", "partial", "missing", "modified", "clone"):
             ttk.Label(legend, image=self.icons[key]).pack(side="left", padx=(8, 3))
             label = ttk.Label(legend)
             label.pack(side="left")
@@ -314,16 +342,17 @@ class RomotecaApp(tk.Tk):
         self.progress = ttk.Progressbar(self, mode="determinate")
         self._set_dynamic_tree_colors("dark" if self.dark_mode else "light")
         self._set_native_titlebar()
+        self.after(50, self._set_native_titlebar)
 
     def _set_dynamic_tree_colors(self, mode: str) -> None:
         if not hasattr(self, "collection_tree"):
             return
         if mode == "dark":
             colors = {"pending": "#e4e7eb", "green": "#49d17d", "yellow": "#f3c969", "red": "#ff6b6b"}
-            result_colors = {"complete": "#49d17d", "partial": "#f3c969", "missing": "#ff6b6b", "unknown": "#f3c969"}
+            result_colors = {"complete": "#49d17d", "partial": "#f3c969", "missing": "#ff6b6b", "unknown": "#f3c969", "modified": "#f5a742"}
         else:
             colors = {"pending": "#30343b", "green": "#137333", "yellow": "#9a6200", "red": "#b42318"}
-            result_colors = {"complete": "#137333", "partial": "#9a6200", "missing": "#b42318", "unknown": "#9a6200"}
+            result_colors = {"complete": "#137333", "partial": "#9a6200", "missing": "#b42318", "unknown": "#9a6200", "modified": "#c56a00"}
         for tag, color in colors.items():
             self.collection_tree.tag_configure(tag, foreground=color, font=("Segoe UI", 10, "bold"))
         for tag, color in result_colors.items():
@@ -376,6 +405,7 @@ class RomotecaApp(tk.Tk):
 
         settings_menu = new_menu(self)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
+        settings_menu.add_command(label=self.tr("chdman_path"), command=self._choose_chdman)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
         settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
         workers_menu = new_menu(settings_menu)
@@ -437,6 +467,7 @@ class RomotecaApp(tk.Tk):
         self._configure_style()
         self._create_icons()
         self._translate_ui()
+        self.after(50, self._set_native_titlebar)
 
     def _toggle_dark_mode(self) -> None:
         self.theme_mode = "dark" if self.dark_mode_var.get() else "light"
@@ -456,7 +487,7 @@ class RomotecaApp(tk.Tk):
         self.collection_tree.heading("name", text=self.tr("name"))
         self.collection_tree.heading("have", text=self.tr("have"))
         self.show_label.configure(text=self.tr("show"))
-        filters = (self.tr("all"), self.tr("complete_plural"), self.tr("partial_plural"), self.tr("missing_plural"), self.tr("unknown_plural"))
+        filters = (self.tr("all"), self.tr("complete_plural"), self.tr("partial_plural"), self.tr("missing_plural"), self.tr("unknown_plural"), self.tr("modified_plural"))
         self.filter_box.configure(values=filters)
         self.filter_var.set(filters[0])
         self.result_tree.heading("#0", text="")
@@ -785,6 +816,16 @@ class RomotecaApp(tk.Tk):
         save_settings(self.settings)
         self._show_current_info()
 
+    def _choose_chdman(self) -> None:
+        selected = filedialog.askopenfilename(
+            title=self.tr("choose_chdman"),
+            filetypes=(("chdman", "chdman.exe"), ("All files", "*.*")),
+        )
+        if selected:
+            self.chdman_path = selected
+            self.settings["chdman_path"] = selected
+            save_settings(self.settings)
+
     def _toggle_auto_bios(self) -> None:
         self.auto_bios = bool(self.auto_bios_var.get())
         self.settings["auto_bios"] = self.auto_bios
@@ -840,7 +881,7 @@ class RomotecaApp(tk.Tk):
             self.events.put(("progress", current, total, name))
         try:
             allowed_extensions = self._catalog_extensions(session.catalog)
-            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers)
+            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers, chdman_path=self.chdman_path)
             scanned = list(rom_scanned)
             needs_bios = any(
                 "[bios]" in (game.name + " " + game.description).lower()
@@ -848,7 +889,7 @@ class RomotecaApp(tk.Tk):
             )
             bios = self._effective_bios_folder(session.rom_folder) if needs_bios else None
             if bios and bios.resolve() != session.rom_folder.resolve():
-                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers))
+                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers, chdman_path=self.chdman_path))
             results, summary = compare_catalog(session.catalog, scanned)
             # BIOS files belonging to other systems should not appear as unknown ROMs.
             unknown = find_unknown_files(results, rom_scanned)
@@ -944,10 +985,20 @@ class RomotecaApp(tk.Tk):
             return
         total = summary.complete + summary.partial + summary.missing
         percent = (summary.complete / total * 100) if total else 0
-        self.status_var.set(f"{self.tr('complete_plural')} {summary.complete:,}/{total:,} ({percent:.1f} %) · {self.tr('partial_plural')} {summary.partial:,} · {self.tr('missing_plural')} {summary.missing:,} · {self.tr('unknown_plural')} {summary.unknown:,}")
+        modified = sum(1 for item in session.unknown_files if self._looks_modified(item.display_name))
+        self.status_var.set(f"{self.tr('complete_plural')} {summary.complete:,}/{total:,} ({percent:.1f} %) · {self.tr('partial_plural')} {summary.partial:,} · {self.tr('missing_plural')} {summary.missing:,} · {self.tr('unknown_plural')} {summary.unknown - modified:,} · {self.tr('modified_plural')} {modified:,}")
+
+    @staticmethod
+    def _looks_modified(name: str) -> bool:
+        normalized = name.casefold()
+        markers = (
+            "translation", "translated", "traducción", "traduccion", "traducido",
+            "patched", "patch", "undub", "fan hack", "fan-hack", "spa-translation",
+        )
+        return any(marker in normalized for marker in markers)
 
     def _filter_state(self) -> str:
-        return {self.tr("all"): "all", self.tr("complete_plural"): "complete", self.tr("partial_plural"): "partial", self.tr("missing_plural"): "missing", self.tr("unknown_plural"): "unknown"}.get(self.filter_var.get(), "all")
+        return {self.tr("all"): "all", self.tr("complete_plural"): "complete", self.tr("partial_plural"): "partial", self.tr("missing_plural"): "missing", self.tr("unknown_plural"): "unknown", self.tr("modified_plural"): "modified"}.get(self.filter_var.get(), "all")
 
     def _fill_results(self) -> None:
         if not hasattr(self, "result_tree"):
@@ -969,10 +1020,14 @@ class RomotecaApp(tk.Tk):
                 first = result.matches[0]
                 detail = first.path.name + (f" › {first.archive_member}" if first.archive_member else "")
             self.result_tree.insert("", "end", image=self.icons[icon_key], values=(self.tr(status_key), result.game.description, f"{result.found_assets}/{result.expected_assets}", detail), tags=(key,))
-        if selected in ("all", "unknown"):
+        if selected in ("all", "unknown", "modified"):
             for item in session.unknown_files:
+                modified = self._looks_modified(item.display_name)
+                item_key = "modified" if modified else "unknown"
+                if selected not in ("all", item_key):
+                    continue
                 detail = str(item.path) + (f" › {item.archive_member}" if item.archive_member else "")
-                self.result_tree.insert("", "end", image=self.icons["unknown"], values=(self.tr("unknown"), item.display_name, "—", detail), tags=("unknown",))
+                self.result_tree.insert("", "end", image=self.icons[item_key], values=(self.tr(item_key), item.display_name, "—", detail), tags=(item_key,))
 
     def _export_csv(self) -> None:
         session = self.current

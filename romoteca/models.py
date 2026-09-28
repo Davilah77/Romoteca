@@ -48,6 +48,7 @@ class ScannedFile:
     sha1: str | None
     archive_member: str | None = None
     verifiable: bool = True
+    source_format: str | None = None
 
 
 class GameState(str, Enum):
