@@ -545,7 +545,7 @@ class RomotecaApp(tk.Tk):
             webbrowser.open(release_url)
             return
         target = Path(sys.executable).resolve()
-        temporary = Path(tempfile.gettempdir()) / "Romoteca.new.exe"
+        temporary = Path(tempfile.gettempdir()) / f"Romoteca.update.{os.getpid()}.exe"
         try:
             with urllib.request.urlopen(asset["browser_download_url"], timeout=60) as response:
                 temporary.write_bytes(response.read())
@@ -554,22 +554,34 @@ class RomotecaApp(tk.Tk):
                 actual = hashlib.sha256(temporary.read_bytes()).hexdigest()
                 if actual != expected:
                     raise ValueError("Downloaded update checksum does not match")
-            script = temporary.with_suffix(".cmd")
+            script = temporary.with_suffix(".ps1")
             # Wait for this process to exit before replacing the one-file
             # executable. PyInstaller keeps its extracted MEI directory alive
             # until shutdown, so a fixed short timeout is not reliable.
+            def _ps_quote(value: Path | str) -> str:
+                return "'" + str(value).replace("'", "''") + "'"
+
             script.write_text(
-                f'@echo off\r\n'
-                f'set "ROMOTECA_PID={os.getpid()}"\r\n'
-                f':wait_for_exit\r\n'
-                f'tasklist /FI "PID eq %ROMOTECA_PID%" 2>NUL | findstr /I " %ROMOTECA_PID% " >NUL\r\n'
-                f'if not errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait_for_exit)\r\n'
-                f'copy /Y "{temporary}" "{target}" >NUL\r\n'
-                f'start "" "{target}"\r\n'
-                f'del "%~f0"\r\n',
+                "$ErrorActionPreference = 'SilentlyContinue'\n"
+                f"$romotecaPid = {os.getpid()}\n"
+                f"$source = {_ps_quote(temporary)}\n"
+                f"$target = {_ps_quote(target)}\n"
+                f"$script = {_ps_quote(script)}\n"
+                "while (Get-Process -Id $romotecaPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+                "Start-Sleep -Milliseconds 500\n"
+                "$copied = $false\n"
+                "for ($attempt = 0; $attempt -lt 30 -and -not $copied; $attempt++) {\n"
+                "    try { Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop; $copied = $true } catch { Start-Sleep -Seconds 1 }\n"
+                "}\n"
+                "if ($copied) { Start-Process -FilePath $target }\n"
+                "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue\n"
+                "Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n",
                 encoding="utf-8",
             )
-            subprocess.Popen(["cmd", "/c", str(script)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
             self.destroy()
         except Exception as exc:
             temporary.unlink(missing_ok=True)

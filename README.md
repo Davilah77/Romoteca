@@ -51,6 +51,10 @@ CHD verification does not change, rename or delete any ROM. A CHD that is health
 
 - Fixed the Windows self-updater so it waits for the running executable to close completely before replacing and restarting it. This prevents PyInstaller `Python DLL` errors during updates.
 
+## Release 0.4.3.2
+
+- Replaced the updater's locale-sensitive process detection with a PowerShell PID wait and retry loop, preventing update races and temporary PyInstaller DLL errors on Windows.
+
 ## Acknowledgements
 
 Romoteca gratefully acknowledges the preservation work of [Redump](https://redump.info/), [No-Intro](https://www.no-intro.org/) and [TOSEC](https://www.tosecdev.org/). Their databases and DAT files are maintained by their respective communities and are not bundled with Romoteca. Please consult each project's own terms when downloading or using their data.
