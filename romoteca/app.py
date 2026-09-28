@@ -341,6 +341,7 @@ class RomotecaApp(tk.Tk):
         self.top_menu_frame.configure(background=menu_background)
         self._posted_menu = None
         self._menu_active = False
+        self._menu_clicked = False
         self._menu_buttons = []
         self._menu_button_menus = {}
 
@@ -352,7 +353,11 @@ class RomotecaApp(tk.Tk):
         def add_menu_button(label: str, menu: tk.Menu) -> None:
             button = tk.Button(self.top_menu_frame, text=label, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground, highlightthickness=0)
             button.pack(side="left")
-            def show_menu() -> None:
+            def show_menu(from_hover: bool = False) -> None:
+                if from_hover and not self._menu_clicked:
+                    return
+                if not from_hover:
+                    self._menu_clicked = True
                 if self._posted_menu is menu:
                     self._close_posted_menu()
                     return
@@ -365,7 +370,7 @@ class RomotecaApp(tk.Tk):
                 finally:
                     menu.grab_release()
             button.configure(command=show_menu)
-            button.bind("<Enter>", lambda _event: (button.configure(background="#3c4043" if self.dark_mode else "#d9d9d9"), show_menu() if self._menu_active and self._posted_menu is not None and self._posted_menu is not menu else None))
+            button.bind("<Enter>", lambda _event: (button.configure(background="#3c4043" if self.dark_mode else "#d9d9d9"), show_menu(True) if self._menu_active and self._posted_menu is not None and self._posted_menu is not menu else None))
             button.bind("<Leave>", lambda _event: button.configure(background=menu_background))
             self._menu_buttons.append(button)
             self._menu_button_menus[button] = menu
@@ -423,6 +428,7 @@ class RomotecaApp(tk.Tk):
             self._posted_menu.unpost()
             self._posted_menu = None
         self._menu_active = False
+        self._menu_clicked = False
 
     def _menu_motion(self, event: tk.Event) -> None:
         """Switch menus while moving across the menu bar, after a click opened one."""
