@@ -143,7 +143,9 @@ class RomotecaApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self.menu_bar = tk.Menu(self)
-        self.configure(menu=self.menu_bar)
+        menu_background = "#202124" if self.dark_mode else "#f0f0f0"
+        self.top_menu_frame = tk.Frame(self, background=menu_background, height=30)
+        self.top_menu_frame.pack(fill="x", side="top")
         root = ttk.Frame(self, padding=(14, 10, 14, 0))
         root.pack(fill="both", expand=True)
 
@@ -271,6 +273,16 @@ class RomotecaApp(tk.Tk):
 
     def _build_menu(self) -> None:
         self.menu_bar.delete(0, "end")
+        for child in self.top_menu_frame.winfo_children():
+            child.destroy()
+        menu_background = "#202124" if self.dark_mode else "#f0f0f0"
+        menu_foreground = "#f1f3f4" if self.dark_mode else "#202124"
+        self.top_menu_frame.configure(background=menu_background)
+
+        def add_menu_button(label: str, menu: tk.Menu) -> None:
+            button = tk.Menubutton(self.top_menu_frame, text=label, menu=menu, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground)
+            button.pack(side="left")
+
         file_menu = tk.Menu(self.menu_bar, tearoff=False)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
         file_menu.add_command(label=self.tr("download_online"), command=self._download_online_dat)
@@ -280,7 +292,7 @@ class RomotecaApp(tk.Tk):
         file_menu.add_command(label=self.tr("export"), command=self._export_csv)
         file_menu.add_separator()
         file_menu.add_command(label=self.tr("exit"), command=self.destroy)
-        self.menu_bar.add_cascade(label=self.tr("file"), menu=file_menu)
+        add_menu_button(self.tr("file"), file_menu)
 
         settings_menu = tk.Menu(self.menu_bar, tearoff=False)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
@@ -293,7 +305,7 @@ class RomotecaApp(tk.Tk):
         settings_menu.add_cascade(label=self.tr("scan_workers"), menu=workers_menu)
         self.dark_mode_var = tk.BooleanVar(value=self.dark_mode)
         settings_menu.add_checkbutton(label=self.tr("dark_mode"), variable=self.dark_mode_var, command=self._toggle_dark_mode)
-        self.menu_bar.add_cascade(label=self.tr("settings"), menu=settings_menu)
+        add_menu_button(self.tr("settings"), settings_menu)
 
         language_menu = tk.Menu(self.menu_bar, tearoff=False)
         self.language_var = tk.StringVar(value=self.language)
@@ -303,7 +315,7 @@ class RomotecaApp(tk.Tk):
         language_menu.add_radiobutton(label="Deutsch", value="de", variable=self.language_var, command=lambda: self._change_language("de"))
         language_menu.add_radiobutton(label="Nederlands", value="nl", variable=self.language_var, command=lambda: self._change_language("nl"))
         language_menu.add_radiobutton(label="Русский", value="ru", variable=self.language_var, command=lambda: self._change_language("ru"))
-        self.menu_bar.add_cascade(label=self.tr("language"), menu=language_menu)
+        add_menu_button(self.tr("language"), language_menu)
 
         help_menu = tk.Menu(self.menu_bar, tearoff=False)
         help_menu.add_command(label=self.tr("about"), command=self._show_about)
@@ -311,7 +323,7 @@ class RomotecaApp(tk.Tk):
         for key, url in self._dat_websites():
             sites_menu.add_command(label=key, command=lambda target=url: webbrowser.open(target))
         help_menu.add_cascade(label=self.tr("dat_websites"), menu=sites_menu)
-        self.menu_bar.add_cascade(label=self.tr("help"), menu=help_menu)
+        add_menu_button(self.tr("help"), help_menu)
 
     @staticmethod
     def _dat_websites() -> tuple[tuple[str, str], ...]:
