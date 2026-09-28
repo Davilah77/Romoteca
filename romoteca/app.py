@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
+import os
 import queue
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import tkinter as tk
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,7 +57,8 @@ class RomotecaApp(tk.Tk):
         self.settings = load_settings()
         self.language = self.settings.get("language", "en")
         self.tr = Translator(self.language)
-        self.dark_mode = bool(self.settings.get("dark_mode", False))
+        self.theme_mode = self.settings.get("theme_mode", "system")
+        self.dark_mode = self._theme_is_dark(self.theme_mode)
         self.scan_workers = self.settings.get("scan_workers", "auto")
         self.collections: dict[str, CollectionSession] = {}
         self.current_key: str | None = None
@@ -70,14 +77,65 @@ class RomotecaApp(tk.Tk):
                 self.iconbitmap(default=str(icon))
             except tk.TclError:
                 pass
-        self.geometry("1180x720")
+        self.geometry(self.settings.get("window_geometry", "1180x720"))
         self.minsize(900, 560)
         self._configure_style()
         self._create_icons()
         self._build_ui()
         self._load_local_dats()
         self._translate_ui()
+        self._restore_layout()
+        self.protocol("WM_DELETE_WINDOW", self._close_app)
         self.after(100, self._process_events)
+
+    @staticmethod
+    def _system_prefers_dark() -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+                return int(winreg.QueryValueEx(key, "AppsUseLightTheme")[0]) == 0
+        except (OSError, ValueError):
+            return False
+
+    @classmethod
+    def _theme_is_dark(cls, mode: str) -> bool:
+        return mode == "dark" or (mode == "system" and cls._system_prefers_dark())
+
+    def _set_native_titlebar(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            value = ctypes.c_int(1 if self.dark_mode else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        except (AttributeError, OSError):
+            pass
+
+    def _close_app(self) -> None:
+        self.settings["window_geometry"] = self.geometry()
+        self.settings["collection_tree_columns"] = {column: self.collection_tree.column(column, "width") for column in ("name", "have")}
+        self.settings["result_tree_columns"] = {column: self.result_tree.column(column, "width") for column in ("#0", "status", "game", "have", "detail")}
+        try:
+            self.settings["pane_sash"] = self.main_pane.sashpos(0)
+        except tk.TclError:
+            pass
+        save_settings(self.settings)
+        self.destroy()
+
+    def _restore_layout(self) -> None:
+        for column, width in self.settings.get("collection_tree_columns", {}).items():
+            if column in ("name", "have"):
+                self.collection_tree.column(column, width=int(width))
+        for column, width in self.settings.get("result_tree_columns", {}).items():
+            if column in ("#0", "status", "game", "have", "detail"):
+                self.result_tree.column(column, width=int(width))
+        try:
+            self.main_pane.sashpos(0, int(self.settings.get("pane_sash", 290)))
+        except (tk.TclError, ValueError):
+            pass
 
     @property
     def current(self) -> CollectionSession | None:
@@ -118,7 +176,8 @@ class RomotecaApp(tk.Tk):
             style.configure("Status.TLabel", background="#f0f0f0", foreground="#202124")
             self._set_dynamic_tree_colors("light")
         style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
-        style.configure("Muted.TLabel", foreground="#5b6470")
+        if not self.dark_mode:
+            style.configure("Muted.TLabel", foreground="#5b6470")
         style.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
         style.configure("Treeview.Heading", font=("Segoe UI", 10, "bold"))
         style.configure("Collection.Horizontal.TProgressbar", troughcolor="#e7edf3", background="#28a745", lightcolor="#28a745", darkcolor="#188038", thickness=14)
@@ -170,7 +229,7 @@ class RomotecaApp(tk.Tk):
         self.export_button = ttk.Button(toolbar, command=self._export_csv, state="disabled")
         self.export_button.pack(side="right")
 
-        pane = ttk.Panedwindow(root, orient="horizontal")
+        pane = self.main_pane = ttk.Panedwindow(root, orient="horizontal")
         pane.pack(fill="both", expand=True)
         self.left_panel = ttk.Frame(pane, width=290)
         self.main_panel = ttk.Frame(pane)
@@ -254,6 +313,7 @@ class RomotecaApp(tk.Tk):
         self.status.pack(side="bottom", fill="x")
         self.progress = ttk.Progressbar(self, mode="determinate")
         self._set_dynamic_tree_colors("dark" if self.dark_mode else "light")
+        self._set_native_titlebar()
 
     def _set_dynamic_tree_colors(self, mode: str) -> None:
         if not hasattr(self, "collection_tree"):
@@ -283,7 +343,7 @@ class RomotecaApp(tk.Tk):
             button = tk.Menubutton(self.top_menu_frame, text=label, menu=menu, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground)
             button.pack(side="left")
 
-        file_menu = tk.Menu(self.menu_bar, tearoff=False)
+        file_menu = tk.Menu(self, tearoff=False)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
         file_menu.add_command(label=self.tr("download_online"), command=self._download_online_dat)
         file_menu.add_command(label=self.tr("select_roms"), command=self._choose_rom_folder)
@@ -294,7 +354,7 @@ class RomotecaApp(tk.Tk):
         file_menu.add_command(label=self.tr("exit"), command=self.destroy)
         add_menu_button(self.tr("file"), file_menu)
 
-        settings_menu = tk.Menu(self.menu_bar, tearoff=False)
+        settings_menu = tk.Menu(self, tearoff=False)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
         settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
@@ -303,11 +363,17 @@ class RomotecaApp(tk.Tk):
         for value, label in (("auto", self.tr("workers_auto")), ("2", "2"), ("4", "4"), ("8", "8"), ("12", "12")):
             workers_menu.add_radiobutton(label=label, value=value, variable=self.scan_workers_var, command=self._set_scan_workers)
         settings_menu.add_cascade(label=self.tr("scan_workers"), menu=workers_menu)
+        theme_menu = tk.Menu(settings_menu, tearoff=False)
+        self.theme_var = tk.StringVar(value=self.theme_mode)
+        for value, label in (("system", self.tr("theme_system")), ("light", self.tr("theme_light")), ("dark", self.tr("theme_dark"))):
+            theme_menu.add_radiobutton(label=label, value=value, variable=self.theme_var, command=self._set_theme)
+        settings_menu.add_cascade(label=self.tr("theme"), menu=theme_menu)
         self.dark_mode_var = tk.BooleanVar(value=self.dark_mode)
-        settings_menu.add_checkbutton(label=self.tr("dark_mode"), variable=self.dark_mode_var, command=self._toggle_dark_mode)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=self.tr("check_updates"), command=self._check_for_updates)
         add_menu_button(self.tr("settings"), settings_menu)
 
-        language_menu = tk.Menu(self.menu_bar, tearoff=False)
+        language_menu = tk.Menu(self, tearoff=False)
         self.language_var = tk.StringVar(value=self.language)
         language_menu.add_radiobutton(label="English", value="en", variable=self.language_var, command=lambda: self._change_language("en"))
         language_menu.add_radiobutton(label="Español", value="es", variable=self.language_var, command=lambda: self._change_language("es"))
@@ -317,7 +383,7 @@ class RomotecaApp(tk.Tk):
         language_menu.add_radiobutton(label="Русский", value="ru", variable=self.language_var, command=lambda: self._change_language("ru"))
         add_menu_button(self.tr("language"), language_menu)
 
-        help_menu = tk.Menu(self.menu_bar, tearoff=False)
+        help_menu = tk.Menu(self, tearoff=False)
         help_menu.add_command(label=self.tr("about"), command=self._show_about)
         sites_menu = tk.Menu(help_menu, tearoff=False)
         for key, url in self._dat_websites():
@@ -338,13 +404,18 @@ class RomotecaApp(tk.Tk):
         self.settings["scan_workers"] = self.scan_workers
         save_settings(self.settings)
 
-    def _toggle_dark_mode(self) -> None:
-        self.dark_mode = bool(self.dark_mode_var.get())
-        self.settings["dark_mode"] = self.dark_mode
+    def _set_theme(self) -> None:
+        self.theme_mode = self.theme_var.get()
+        self.dark_mode = self._theme_is_dark(self.theme_mode)
+        self.settings["theme_mode"] = self.theme_mode
         save_settings(self.settings)
         self._configure_style()
         self._create_icons()
         self._translate_ui()
+
+    def _toggle_dark_mode(self) -> None:
+        self.theme_mode = "dark" if self.dark_mode_var.get() else "light"
+        self._set_theme()
 
     def _translate_ui(self) -> None:
         self._build_menu()
@@ -385,6 +456,47 @@ class RomotecaApp(tk.Tk):
 
     def _show_about(self) -> None:
         messagebox.showinfo(self.tr("about"), self.tr("about_text", version=__version__), parent=self)
+
+    def _check_for_updates(self) -> None:
+        self.status_var.set(self.tr("checking_updates"))
+
+        def worker() -> None:
+            try:
+                request = urllib.request.Request(
+                    "https://api.github.com/repos/Davilah77/Romoteca/releases/latest",
+                    headers={"Accept": "application/vnd.github+json", "User-Agent": "Romoteca"},
+                )
+                with urllib.request.urlopen(request, timeout=15) as response:
+                    release = json.loads(response.read().decode("utf-8"))
+                latest = str(release.get("tag_name", "")).lstrip("v")
+                asset = next((item for item in release.get("assets", []) if item.get("name") == "Romoteca.exe"), None)
+                self.events.put(("update_available", latest, asset, release.get("html_url", "")))
+            except Exception as exc:
+                self.events.put(("update_error", str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _download_and_install_update(self, asset: dict, release_url: str) -> None:
+        if not getattr(sys, "frozen", False):
+            webbrowser.open(release_url)
+            return
+        target = Path(sys.executable).resolve()
+        temporary = Path(tempfile.gettempdir()) / "Romoteca.new.exe"
+        try:
+            with urllib.request.urlopen(asset["browser_download_url"], timeout=60) as response:
+                temporary.write_bytes(response.read())
+            expected = str(asset.get("digest", "")).removeprefix("sha256:").lower()
+            if expected:
+                actual = hashlib.sha256(temporary.read_bytes()).hexdigest()
+                if actual != expected:
+                    raise ValueError("Downloaded update checksum does not match")
+            script = temporary.with_suffix(".cmd")
+            script.write_text(f'@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "{temporary}" "{target}" >nul\r\nstart "" "{target}"\r\ndel "%~f0"\r\n', encoding="utf-8")
+            subprocess.Popen(["cmd", "/c", str(script)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self.destroy()
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            messagebox.showerror(self.tr("update_error_title"), str(exc), parent=self)
 
     def _load_local_dats(self) -> None:
         paths = sorted((*self.dats_directory.glob("*.dat"), *self.dats_directory.glob("*.xml")))
@@ -739,6 +851,18 @@ class RomotecaApp(tk.Tk):
                     self._set_busy(False)
                     messagebox.showerror(self.tr("scan_error"), event[1], parent=self)
                     self.status_var.set(self.tr("scan_failed"))
+                elif event[0] == "update_available":
+                    latest, asset, release_url = event[1], event[2], event[3]
+                    if not latest or latest == __version__ or not asset:
+                        self.status_var.set(self.tr("updates_current"))
+                    elif messagebox.askyesno(self.tr("update_available_title"), self.tr("update_available", version=latest), parent=self):
+                        self.status_var.set(self.tr("updating"))
+                        threading.Thread(target=self._download_and_install_update, args=(asset, release_url), daemon=True).start()
+                    else:
+                        self.status_var.set(self.tr("ready"))
+                elif event[0] == "update_error":
+                    self.status_var.set(self.tr("updates_failed"))
+                    messagebox.showerror(self.tr("update_error_title"), event[1], parent=self)
                 elif event[0] == "online_loaded":
                     window = getattr(self, "online_window", None)
                     if window and window.winfo_exists():
