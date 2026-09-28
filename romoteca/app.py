@@ -92,6 +92,10 @@ class RomotecaApp(tk.Tk):
         if self.dark_mode:
             background, foreground, field = "#202124", "#f1f3f4", "#303134"
             self.configure(background=background)
+            self.option_add("*Menu.background", background)
+            self.option_add("*Menu.foreground", foreground)
+            self.option_add("*Menu.activeBackground", "#3c4043")
+            self.option_add("*Menu.activeForeground", foreground)
             style.configure(".", background=background, foreground=foreground)
             style.configure("TFrame", background=background)
             style.configure("TLabel", background=background, foreground=foreground)
@@ -100,10 +104,19 @@ class RomotecaApp(tk.Tk):
             style.configure("TButton", background=field, foreground=foreground)
             style.configure("TEntry", fieldbackground=field, foreground=foreground)
             style.configure("TCombobox", fieldbackground=field, foreground=foreground)
+            style.map("TCombobox", fieldbackground=[("readonly", field)], foreground=[("readonly", foreground)], selectbackground=[("readonly", "#245a9a")], selectforeground=[("readonly", "#ffffff")])
+            style.configure("Muted.TLabel", background=background, foreground="#b8c0cc")
+            style.configure("Status.TLabel", background=background, foreground=foreground)
             style.configure("Treeview", background=field, fieldbackground=field, foreground=foreground)
             style.map("Treeview", background=[("selected", "#245a9a")], foreground=[("selected", "#ffffff")])
+            self._set_dynamic_tree_colors("dark")
         else:
             self.configure(background="#f0f0f0")
+            self.option_add("*Menu.background", "#f0f0f0")
+            self.option_add("*Menu.foreground", "#202124")
+            style.configure("Muted.TLabel", background="#f0f0f0", foreground="#5b6470")
+            style.configure("Status.TLabel", background="#f0f0f0", foreground="#202124")
+            self._set_dynamic_tree_colors("light")
         style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
         style.configure("Muted.TLabel", foreground="#5b6470")
         style.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
@@ -235,9 +248,26 @@ class RomotecaApp(tk.Tk):
             self.legend_labels[key] = label
 
         self.status_var = tk.StringVar()
-        self.status = ttk.Label(self, textvariable=self.status_var, padding=(14, 7))
+        self.status = ttk.Label(self, textvariable=self.status_var, style="Status.TLabel", padding=(14, 7))
         self.status.pack(side="bottom", fill="x")
         self.progress = ttk.Progressbar(self, mode="determinate")
+        self._set_dynamic_tree_colors("dark" if self.dark_mode else "light")
+
+    def _set_dynamic_tree_colors(self, mode: str) -> None:
+        if not hasattr(self, "collection_tree"):
+            return
+        if mode == "dark":
+            colors = {"pending": "#e4e7eb", "green": "#49d17d", "yellow": "#f3c969", "red": "#ff6b6b"}
+            result_colors = {"complete": "#49d17d", "partial": "#f3c969", "missing": "#ff6b6b", "unknown": "#f3c969"}
+        else:
+            colors = {"pending": "#30343b", "green": "#137333", "yellow": "#9a6200", "red": "#b42318"}
+            result_colors = {"complete": "#137333", "partial": "#9a6200", "missing": "#b42318", "unknown": "#9a6200"}
+        for tag, color in colors.items():
+            self.collection_tree.tag_configure(tag, foreground=color, font=("Segoe UI", 10, "bold"))
+        for tag, color in result_colors.items():
+            self.result_tree.tag_configure(tag, foreground=color)
+        if hasattr(self, "bios_status_label"):
+            self.bios_status_label.configure(background="#202124" if mode == "dark" else "#f0f0f0")
 
     def _build_menu(self) -> None:
         self.menu_bar.delete(0, "end")
