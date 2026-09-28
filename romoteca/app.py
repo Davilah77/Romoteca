@@ -340,8 +340,14 @@ class RomotecaApp(tk.Tk):
         self.top_menu_frame.configure(background=menu_background)
 
         def add_menu_button(label: str, menu: tk.Menu) -> None:
-            button = tk.Menubutton(self.top_menu_frame, text=label, menu=menu, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground)
+            button = tk.Button(self.top_menu_frame, text=label, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground, highlightthickness=0)
             button.pack(side="left")
+            def show_menu() -> None:
+                try:
+                    menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+                finally:
+                    menu.grab_release()
+            button.configure(command=show_menu)
 
         file_menu = tk.Menu(self, tearoff=False)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
