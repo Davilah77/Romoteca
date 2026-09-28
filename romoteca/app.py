@@ -26,7 +26,7 @@ from .i18n import Translator
 from .matcher import compare_catalog, find_unknown_files
 from .models import DatCatalog, GameResult, GameState, ScanSummary, ScannedFile
 from .online_sources import OnlineDat, download_dat, list_github_dats, list_redump_dats
-from .scanner import ScanCancelled, scan_folder
+from .scanner import DEFAULT_IGNORED_DIRECTORIES, DEFAULT_IGNORED_EXTENSIONS, ScanCancelled, scan_folder
 from .settings import load_settings, save_settings
 
 
@@ -69,6 +69,7 @@ class RomotecaApp(tk.Tk):
         self.scan_workers = self.settings.get("scan_workers", "auto")
         self.read_only_mode = bool(self.settings.get("read_only_mode", True))
         self.chdman_path = self.settings.get("chdman_path")
+        self.archive_tool_path = self.settings.get("archive_tool_path")
         self.collections: dict[str, CollectionSession] = {}
         self.current_key: str | None = None
         self.events: queue.Queue[tuple] = queue.Queue()
@@ -302,6 +303,7 @@ class RomotecaApp(tk.Tk):
             "missing": self._folder_icon("#d94a48"),
             "unknown": self._folder_icon("#f2b632"),
             "modified": self._folder_icon("#d98b2b"),
+            "duplicate": self._folder_icon("#f3f3f3"),
             "clone": self._folder_icon("#f3f3f3"),
         }
 
@@ -398,6 +400,8 @@ class RomotecaApp(tk.Tk):
         self.result_tree.tag_configure("missing", foreground="#b42318")
         self.result_tree.tag_configure("unknown", foreground="#9a6200")
         self.result_tree.tag_configure("modified", foreground="#c56a00")
+        self.result_tree.tag_configure("duplicate", foreground="#68707a")
+        self.result_tree.tag_configure("clone", foreground="#68707a")
         scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.result_tree.yview)
         self.result_tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
@@ -408,7 +412,7 @@ class RomotecaApp(tk.Tk):
         self.legend_title = ttk.Label(legend)
         self.legend_title.pack(side="left", padx=(0, 8))
         self.legend_labels: dict[str, ttk.Label] = {}
-        for key in ("complete", "partial", "missing", "modified", "clone"):
+        for key in ("complete", "partial", "missing", "modified", "duplicate", "clone"):
             ttk.Label(legend, image=self.icons[key]).pack(side="left", padx=(8, 3))
             label = ttk.Label(legend)
             label.pack(side="left")
@@ -427,10 +431,10 @@ class RomotecaApp(tk.Tk):
             return
         if mode == "dark":
             colors = {"pending": "#e4e7eb", "green": "#49d17d", "yellow": "#f3c969", "red": "#ff6b6b"}
-            result_colors = {"complete": "#49d17d", "partial": "#f3c969", "missing": "#ff6b6b", "unknown": "#f3c969", "modified": "#f5a742"}
+            result_colors = {"complete": "#49d17d", "partial": "#f3c969", "missing": "#ff6b6b", "unknown": "#f3c969", "modified": "#f5a742", "duplicate": "#d8dde3", "clone": "#d8dde3"}
         else:
             colors = {"pending": "#30343b", "green": "#137333", "yellow": "#9a6200", "red": "#b42318"}
-            result_colors = {"complete": "#137333", "partial": "#9a6200", "missing": "#b42318", "unknown": "#9a6200", "modified": "#c56a00"}
+            result_colors = {"complete": "#137333", "partial": "#9a6200", "missing": "#b42318", "unknown": "#9a6200", "modified": "#c56a00", "duplicate": "#68707a", "clone": "#68707a"}
         for tag, color in colors.items():
             self.collection_tree.tag_configure(tag, foreground=color, font=("Segoe UI", 10, "bold"))
         for tag, color in result_colors.items():
@@ -484,6 +488,8 @@ class RomotecaApp(tk.Tk):
         settings_menu = new_menu(self)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
         settings_menu.add_command(label=self.tr("chdman_path"), command=self._choose_chdman)
+        settings_menu.add_command(label=self.tr("archive_tool_path"), command=self._choose_archive_tool)
+        settings_menu.add_command(label=self.tr("scan_filters"), command=self._edit_scan_filters)
         self.read_only_var = tk.BooleanVar(value=self.read_only_mode)
         settings_menu.add_checkbutton(label=self.tr("read_only_mode"), variable=self.read_only_var, command=self._toggle_read_only)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
@@ -552,6 +558,47 @@ class RomotecaApp(tk.Tk):
         save_settings(self.settings)
         self.logger.info("Read-only mode changed: %s", requested)
 
+    def _edit_scan_filters(self) -> None:
+        window = tk.Toplevel(self)
+        window.title(self.tr("scan_filters"))
+        window.transient(self)
+        window.grab_set()
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=self.tr("ignored_extensions"), style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        extensions = self.settings.get("ignored_extensions", sorted(DEFAULT_IGNORED_EXTENSIONS))
+        extension_var = tk.StringVar(value=", ".join(extensions))
+        extension_entry = ttk.Entry(frame, textvariable=extension_var, width=70)
+        extension_entry.grid(row=1, column=0, sticky="ew", pady=(4, 12))
+        ttk.Label(frame, text=self.tr("ignored_directories"), style="Muted.TLabel").grid(row=2, column=0, sticky="w")
+        directories = self.settings.get("ignored_directories", sorted(DEFAULT_IGNORED_DIRECTORIES))
+        directory_var = tk.StringVar(value=", ".join(directories))
+        directory_entry = ttk.Entry(frame, textvariable=directory_var, width=70)
+        directory_entry.grid(row=3, column=0, sticky="ew", pady=(4, 12))
+        ttk.Label(frame, text=self.tr("scan_filters_hint"), style="Muted.TLabel", wraplength=520).grid(row=4, column=0, sticky="w", pady=(0, 12))
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=0, sticky="e")
+
+        def close() -> None:
+            window.grab_release()
+            window.destroy()
+
+        def save() -> None:
+            ignored_extensions = sorted({value.strip().lower() for value in extension_var.get().replace(";", ",").split(",") if value.strip()})
+            ignored_extensions = [value if value.startswith(".") else f".{value}" for value in ignored_extensions]
+            ignored_directories = sorted({value.strip().casefold() for value in directory_var.get().replace(";", ",").split(",") if value.strip()})
+            self.settings["ignored_extensions"] = ignored_extensions
+            self.settings["ignored_directories"] = ignored_directories
+            save_settings(self.settings)
+            self.logger.info("Scan filters changed: extensions=%s directories=%s", ignored_extensions, ignored_directories)
+            self.status_var.set(self.tr("scan_filters_saved"))
+            close()
+
+        ttk.Button(buttons, text=self.tr("cancel"), command=close).pack(side="right")
+        ttk.Button(buttons, text=self.tr("save"), command=save).pack(side="right", padx=(0, 8))
+        frame.columnconfigure(0, weight=1)
+        extension_entry.focus_set()
+
     def _set_theme(self) -> None:
         self.theme_mode = self.theme_var.get()
         self.dark_mode = self._theme_is_dark(self.theme_mode)
@@ -573,14 +620,14 @@ class RomotecaApp(tk.Tk):
         self.online_button.configure(text=self.tr("download_online"))
         self.folder_button.configure(text=self.tr("select_roms"))
         self.scan_button.configure(text=self.tr("scan"))
-        self.cancel_button.configure(text="Cancelar" if self.language == "es" else "Cancel")
+        self.cancel_button.configure(text=self.tr("cancel"))
         self.export_button.configure(text=self.tr("export"))
         self.collections_frame.configure(text=self.tr("collections"))
         self.info_frame.configure(text=self.tr("collection"))
         self.collection_tree.heading("name", text=self.tr("name"))
         self.collection_tree.heading("have", text=self.tr("have"))
         self.show_label.configure(text=self.tr("show"))
-        filters = (self.tr("all"), self.tr("complete_plural"), self.tr("partial_plural"), self.tr("missing_plural"), self.tr("unknown_plural"), self.tr("modified_plural"))
+        filters = (self.tr("all"), self.tr("complete_plural"), self.tr("partial_plural"), self.tr("missing_plural"), self.tr("unknown_plural"), self.tr("modified_plural"), self.tr("duplicates_plural"), self.tr("clones_plural"))
         self.filter_box.configure(values=filters)
         self.filter_var.set(filters[0])
         self.result_tree.heading("#0", text="")
@@ -925,11 +972,11 @@ class RomotecaApp(tk.Tk):
 
     @staticmethod
     def _scanned_to_dict(item: ScannedFile) -> dict:
-        return {"path": str(item.path), "display_name": item.display_name, "size": item.size, "crc": item.crc, "sha1": item.sha1, "archive_member": item.archive_member, "verifiable": item.verifiable}
+        return {"path": str(item.path), "display_name": item.display_name, "size": item.size, "crc": item.crc, "sha1": item.sha1, "archive_member": item.archive_member, "verifiable": item.verifiable, "source_format": item.source_format, "duplicate_of": item.duplicate_of}
 
     @staticmethod
     def _scanned_from_dict(data: dict) -> ScannedFile:
-        return ScannedFile(path=Path(data["path"]), display_name=data.get("display_name", Path(data["path"]).name), size=int(data.get("size", 0)), crc=data.get("crc"), sha1=data.get("sha1"), archive_member=data.get("archive_member"), verifiable=bool(data.get("verifiable", True)))
+        return ScannedFile(path=Path(data["path"]), display_name=data.get("display_name", Path(data["path"]).name), size=int(data.get("size", 0)), crc=data.get("crc"), sha1=data.get("sha1"), archive_member=data.get("archive_member"), verifiable=bool(data.get("verifiable", True)), source_format=data.get("source_format"), duplicate_of=data.get("duplicate_of"))
 
     def _persist_session(self, session: CollectionSession) -> None:
         cache = self.settings.setdefault("scan_cache", {})
@@ -978,6 +1025,17 @@ class RomotecaApp(tk.Tk):
             self.chdman_path = selected
             self.settings["chdman_path"] = selected
             save_settings(self.settings)
+
+    def _choose_archive_tool(self) -> None:
+        selected = filedialog.askopenfilename(
+            title=self.tr("choose_archive_tool"),
+            filetypes=(("7-Zip", "7z.exe 7zz.exe"), ("All files", "*.*")),
+        )
+        if selected:
+            self.archive_tool_path = selected
+            self.settings["archive_tool_path"] = selected
+            save_settings(self.settings)
+            self.logger.info("Archive tool selected: %s", selected)
 
     def _toggle_auto_bios(self) -> None:
         self.auto_bios = bool(self.auto_bios_var.get())
@@ -1031,11 +1089,23 @@ class RomotecaApp(tk.Tk):
         session = self.collections[key]
         assert session.rom_folder
         workers = None if self.scan_workers == "auto" else int(self.scan_workers)
+        ignored_extensions = set(self.settings.get("ignored_extensions", DEFAULT_IGNORED_EXTENSIONS))
+        ignored_directories = set(self.settings.get("ignored_directories", DEFAULT_IGNORED_DIRECTORIES))
         def progress(current: int, total: int, name: str) -> None:
             self.events.put(("progress", current, total, name))
         try:
             allowed_extensions = self._catalog_extensions(session.catalog)
-            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers, chdman_path=self.chdman_path)
+            rom_scanned = scan_folder(
+                session.rom_folder,
+                progress=progress,
+                cancelled=self.cancel_event.is_set,
+                allowed_extensions=allowed_extensions,
+                workers=workers,
+                chdman_path=self.chdman_path,
+                archive_tool_path=self.archive_tool_path,
+                ignored_extensions=ignored_extensions,
+                ignored_directories=ignored_directories,
+            )
             scanned = list(rom_scanned)
             needs_bios = any(
                 "[bios]" in (game.name + " " + game.description).lower()
@@ -1043,7 +1113,18 @@ class RomotecaApp(tk.Tk):
             )
             bios = self._effective_bios_folder(session.rom_folder) if needs_bios else None
             if bios and bios.resolve() != session.rom_folder.resolve():
-                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers, chdman_path=self.chdman_path))
+                scanned.extend(
+                    scan_folder(
+                        bios,
+                        cancelled=self.cancel_event.is_set,
+                        allowed_extensions=allowed_extensions,
+                        workers=workers,
+                        chdman_path=self.chdman_path,
+                        archive_tool_path=self.archive_tool_path,
+                        ignored_extensions=ignored_extensions,
+                        ignored_directories=ignored_directories,
+                    )
+                )
             results, summary = compare_catalog(session.catalog, scanned)
             # BIOS files belonging to other systems should not appear as unknown ROMs.
             unknown = find_unknown_files(results, rom_scanned)
@@ -1145,8 +1226,8 @@ class RomotecaApp(tk.Tk):
             return
         total = summary.complete + summary.partial + summary.missing
         percent = (summary.complete / total * 100) if total else 0
-        modified = sum(1 for item in session.unknown_files if self._looks_modified(item.display_name))
-        self.status_var.set(f"{self.tr('complete_plural')} {summary.complete:,}/{total:,} ({percent:.1f} %) · {self.tr('partial_plural')} {summary.partial:,} · {self.tr('missing_plural')} {summary.missing:,} · {self.tr('unknown_plural')} {summary.unknown - modified:,} · {self.tr('modified_plural')} {modified:,}")
+        modified = sum(1 for item in session.unknown_files if not item.duplicate_of and self._looks_modified(item.display_name))
+        self.status_var.set(f"{self.tr('complete_plural')} {summary.complete:,}/{total:,} ({percent:.1f} %) · {self.tr('partial_plural')} {summary.partial:,} · {self.tr('missing_plural')} {summary.missing:,} · {self.tr('unknown_plural')} {summary.unknown - modified:,} · {self.tr('modified_plural')} {modified:,} · {self.tr('duplicates_plural')} {summary.duplicates:,}")
 
     @staticmethod
     def _looks_modified(name: str) -> bool:
@@ -1158,7 +1239,7 @@ class RomotecaApp(tk.Tk):
         return any(marker in normalized for marker in markers)
 
     def _filter_state(self) -> str:
-        return {self.tr("all"): "all", self.tr("complete_plural"): "complete", self.tr("partial_plural"): "partial", self.tr("missing_plural"): "missing", self.tr("unknown_plural"): "unknown", self.tr("modified_plural"): "modified"}.get(self.filter_var.get(), "all")
+        return {self.tr("all"): "all", self.tr("complete_plural"): "complete", self.tr("partial_plural"): "partial", self.tr("missing_plural"): "missing", self.tr("unknown_plural"): "unknown", self.tr("modified_plural"): "modified", self.tr("duplicates_plural"): "duplicate", self.tr("clones_plural"): "clone"}.get(self.filter_var.get(), "all")
 
     def _fill_results(self) -> None:
         if not hasattr(self, "result_tree"):
@@ -1170,23 +1251,27 @@ class RomotecaApp(tk.Tk):
         selected = self._filter_state()
         for result in session.results:
             key = {GameState.COMPLETE: "complete", GameState.PARTIAL: "partial", GameState.MISSING: "missing"}[result.state]
-            if selected not in ("all", key):
-                continue
             clone = result.game.clone_of is not None and result.state == GameState.COMPLETE
-            icon_key = "clone" if clone else key
             status_key = "clone" if clone else key
+            if selected not in ("all", key, status_key):
+                continue
+            icon_key = "clone" if clone else key
             detail = ""
             if result.matches:
                 first = result.matches[0]
                 detail = first.path.name + (f" › {first.archive_member}" if first.archive_member else "")
-            self.result_tree.insert("", "end", image=self.icons[icon_key], values=(self.tr(status_key), result.game.description, f"{result.found_assets}/{result.expected_assets}", detail), tags=(key,))
-        if selected in ("all", "unknown", "modified"):
+            if clone and result.game.clone_of:
+                detail = (detail + " · " if detail else "") + f"{self.tr('clone_of')}: {result.game.clone_of}"
+            self.result_tree.insert("", "end", image=self.icons[icon_key], values=(self.tr(status_key), result.game.description, f"{result.found_assets}/{result.expected_assets}", detail), tags=(status_key,))
+        if selected in ("all", "unknown", "modified", "duplicate"):
             for item in session.unknown_files:
                 modified = self._looks_modified(item.display_name)
-                item_key = "modified" if modified else "unknown"
+                item_key = "duplicate" if item.duplicate_of else ("modified" if modified else "unknown")
                 if selected not in ("all", item_key):
                     continue
                 detail = str(item.path) + (f" › {item.archive_member}" if item.archive_member else "")
+                if item.duplicate_of:
+                    detail += f" · {self.tr('duplicate_of')}: {item.duplicate_of}"
                 self.result_tree.insert("", "end", image=self.icons[item_key], values=(self.tr(item_key), item.display_name, "—", detail), tags=(item_key,))
 
     def _export_csv(self) -> None:

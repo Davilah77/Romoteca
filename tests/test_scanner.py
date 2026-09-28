@@ -23,6 +23,24 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(by_name["inside.rom"].archive_member, "inside.rom")
         self.assertFalse(by_name["disc.chd"].verifiable)
 
+    def test_scan_filters_skip_scraped_media_and_directories(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        tmp_path = Path(temporary.name)
+        (tmp_path / "game.bin").write_bytes(b"romoteca")
+        (tmp_path / "manuals").mkdir()
+        (tmp_path / "manuals" / "game.pdf").write_bytes(b"manual")
+        (tmp_path / "video.mp4").write_bytes(b"video")
+
+        results = scan_folder(
+            tmp_path,
+            allowed_extensions={".bin"},
+            ignored_extensions={".pdf", ".mp4"},
+            ignored_directories={"manuals"},
+        )
+
+        self.assertEqual([item.display_name for item in results], ["game.bin"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,7 @@ class ScannedFile:
     archive_member: str | None = None
     verifiable: bool = True
     source_format: str | None = None
+    duplicate_of: str | None = None
 
 
 class GameState(str, Enum):
@@ -73,3 +74,4 @@ class ScanSummary:
     missing: int
     unknown: int
     unverified_containers: int
+    duplicates: int = 0

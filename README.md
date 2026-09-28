@@ -25,6 +25,10 @@ incomplete or missing without altering the collection.
 - Configurable scan workers, light/dark theme and multilingual interface.
 - Direct links to the official DAT database websites.
 - Modified/translated file classification for common patch and translation markers.
+- Configurable scan filters for scraped artwork, manuals, videos, metadata and other auxiliary files.
+- Duplicate detection by SHA-1 or CRC/size, including equivalent BIN/CUE and CHD content.
+- Clone-aware result filtering and clone parent details.
+- Read-only ZIP inventory and optional RAR/7Z member listing through an installed 7-Zip executable.
 - Persistent CHD result cache that stores only metadata and hashes.
 - Light and dark themes, including the native Windows title bar.
 - Read-only mode enabled by default, with an explicit setting before any future file-changing action.
@@ -65,6 +69,14 @@ CHD verification does not change, rename or delete any ROM. A CHD that is health
 - Added timestamped configuration backups and restore from the new `backups` folder.
 - Hardened the Windows updater with staged replacement, SHA-256 verification, automatic rollback and a startup health check.
 
+## Release 0.4.4
+
+- Added configurable ignored extensions and directory filters for scraped auxiliary content.
+- Added duplicate detection for files that share SHA-1 or CRC/size, including BIN/CUE and CHD equivalents.
+- Added duplicate filtering and details showing the matching file.
+- Improved clone handling with a clone-only filter and parent information.
+- Added read-only RAR/7Z member inventory through an optional 7-Zip executable.
+
 ## Application data folders
 
 Romoteca keeps operational files easy to find next to the executable:
@@ -74,6 +86,12 @@ Romoteca keeps operational files easy to find next to the executable:
 - `backups`: timestamped configuration backups. Restoring one keeps a backup of the current settings first.
 
 ROM folders and BIOS folders are only scanned. Romoteca does not move, rename or delete their files.
+
+## Scan filters and archives
+
+The **Settings → Scan filters…** dialog controls ignored extensions and directory names. Ignored files are skipped before hashing and do not appear as unrecognized entries; the defaults cover common scraped manuals, videos, artwork and metadata folders. The filters are stored in the normal configuration and can be backed up or restored.
+
+ZIP files are inspected with Python's standard library. RAR and 7Z files can be listed read-only when `7z.exe` or `7zz.exe` is installed and discoverable; the executable can also be selected from **Settings → Archive tool…**. Romoteca never rewrites or deletes an archive. If no compatible tool is available, the archive is reported as an unverified container instead of being treated as a verified ROM.
 
 ## Acknowledgements
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from romoteca.dat_parser import load_dat
 from romoteca.matcher import compare_catalog
-from romoteca.models import GameState, ScannedFile
+from romoteca.models import DatAsset, DatCatalog, DatGame, GameState, ScannedFile
 
 
 class DatAndMatcherTests(unittest.TestCase):
@@ -51,6 +51,22 @@ class DatAndMatcherTests(unittest.TestCase):
         self.assertEqual(results[1].state, GameState.MISSING)
         self.assertEqual(summary.complete, 1)
         self.assertEqual(summary.missing, 2)
+
+    def test_duplicate_content_is_reported_separately(self) -> None:
+        catalog = DatCatalog(
+            name="Test",
+            description="",
+            version="",
+            source_path=Path("test.dat"),
+            games=(DatGame("game", "game", (DatAsset("game.bin", size=3, crc="352441c2"),)),),
+        )
+        first = ScannedFile(Path("game.bin"), "game.bin", 3, "352441c2", None)
+        duplicate = ScannedFile(Path("game.chd"), "game.bin", 3, "352441c2", None, source_format="chd")
+        results, summary = compare_catalog(catalog, [first, duplicate])
+
+        self.assertEqual(results[0].state, GameState.COMPLETE)
+        self.assertEqual(summary.duplicates, 1)
+        self.assertEqual(summary.unknown, 0)
 
 
 if __name__ == "__main__":

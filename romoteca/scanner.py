@@ -18,6 +18,15 @@ from .models import ScannedFile
 
 ProgressCallback = Callable[[int, int, str], None]
 _UNVERIFIED_EXTENSIONS = {".chd", ".rar", ".7z"}
+DEFAULT_IGNORED_EXTENSIONS = {
+    ".avi", ".bmp", ".db", ".doc", ".docx", ".gif", ".htm", ".html",
+    ".jpeg", ".jpg", ".mkv", ".mov", ".mp4", ".nfo", ".pdf", ".png",
+    ".srt", ".txt", ".url", ".webm", ".webp",
+}
+DEFAULT_IGNORED_DIRECTORIES = {
+    "art", "artwork", "bezels", "covers", "docs", "images", "manuals",
+    "marquee", "media", "screenshots", "thumbnails", "videos", "wheel",
+}
 
 
 def _chd_cache_path() -> Path:
@@ -62,6 +71,7 @@ def _cached_scanned_files(path: Path, values: list[dict]) -> list[ScannedFile]:
             archive_member=item.get("archive_member"),
             verifiable=bool(item.get("verifiable", True)),
             source_format=item.get("source_format", "chd"),
+            duplicate_of=item.get("duplicate_of"),
         )
         for item in values
     ]
@@ -77,6 +87,7 @@ def _cache_scanned_files(items: Iterable[ScannedFile]) -> list[dict]:
             "archive_member": item.archive_member,
             "verifiable": item.verifiable,
             "source_format": item.source_format,
+            "duplicate_of": item.duplicate_of,
         }
         for item in items
     ]
@@ -133,6 +144,93 @@ def _scan_zip(path: Path, allowed_extensions: set[str] | None = None) -> Iterabl
             crc=None,
             sha1=None,
             verifiable=False,
+        )
+
+
+def _find_archive_tool(archive_tool_path: str | Path | None) -> str | None:
+    if archive_tool_path:
+        candidate = Path(archive_tool_path)
+        if candidate.is_file():
+            return str(candidate)
+    for name in ("7z", "7zz", "7z.exe", "7zz.exe"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def _scan_7z_archive(
+    path: Path,
+    allowed_extensions: set[str] | None,
+    archive_tool_path: str | Path | None,
+) -> Iterable[ScannedFile]:
+    """List RAR/7Z members read-only through a locally installed 7-Zip tool."""
+    tool = _find_archive_tool(archive_tool_path)
+    if not tool:
+        yield ScannedFile(
+            path=path,
+            display_name=path.name,
+            size=path.stat().st_size if path.exists() else 0,
+            crc=None,
+            sha1=None,
+            verifiable=False,
+            source_format=path.suffix.lower().removeprefix("."),
+        )
+        return
+    try:
+        completed = subprocess.run(
+            [tool, "l", "-slt", "-sccUTF-8", str(path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise OSError(f"7-Zip could not list {path.name}")
+        record: dict[str, str] = {}
+
+        def emit() -> Iterable[ScannedFile]:
+            nonlocal record
+            member = record.get("Path", "")
+            if not member or record.get("Folder") == "+" or record.get("Type") == "Folder":
+                record = {}
+                return ()
+            member_path = Path(member)
+            if allowed_extensions is not None and member_path.suffix.lower() not in allowed_extensions:
+                record = {}
+                return ()
+            size = int(record.get("Size", "0") or 0)
+            crc = record.get("CRC")
+            item = ScannedFile(
+                path=path,
+                display_name=member_path.name,
+                size=size,
+                crc=crc.lower() if crc else None,
+                sha1=None,
+                archive_member=member,
+                source_format=path.suffix.lower().removeprefix("."),
+            )
+            record = {}
+            return (item,)
+
+        for line in completed.stdout.splitlines() + [""]:
+            if not line.strip():
+                yield from emit()
+                continue
+            key, separator, value = line.partition(" = ")
+            if separator:
+                record[key] = value
+    except (OSError, ValueError):
+        yield ScannedFile(
+            path=path,
+            display_name=path.name,
+            size=path.stat().st_size if path.exists() else 0,
+            crc=None,
+            sha1=None,
+            verifiable=False,
+            source_format=path.suffix.lower().removeprefix("."),
         )
 
 
@@ -203,16 +301,29 @@ def scan_folder(
     allowed_extensions: set[str] | None = None,
     workers: int | None = None,
     chdman_path: str | Path | None = None,
+    archive_tool_path: str | Path | None = None,
+    ignored_extensions: set[str] | None = None,
+    ignored_directories: set[str] | None = None,
 ) -> list[ScannedFile]:
     root = Path(folder)
     is_cancelled = cancelled or (lambda: False)
+    configured_extensions = DEFAULT_IGNORED_EXTENSIONS if ignored_extensions is None else ignored_extensions
+    configured_directories = DEFAULT_IGNORED_DIRECTORIES if ignored_directories is None else ignored_directories
+    ignored_ext = {value.lower() if value.startswith(".") else f".{value.lower()}" for value in configured_extensions}
+    ignored_dirs = {value.casefold() for value in configured_directories}
+
+    def is_ignored(path: Path) -> bool:
+        relative = path.relative_to(root)
+        return path.suffix.lower() in ignored_ext or any(part.casefold() in ignored_dirs for part in relative.parts[:-1])
+
     paths = [
         path for path in root.rglob("*")
-        if path.is_file() and (
+        if path.is_file() and not is_ignored(path) and (
             allowed_extensions is None
             or path.suffix.lower() in allowed_extensions
             or path.suffix.lower() == ".chd"
             or path.suffix.lower() == ".zip"
+            or path.suffix.lower() in {".rar", ".7z"}
         )
     ]
     results: list[ScannedFile] = []
@@ -232,6 +343,8 @@ def scan_folder(
             extension = path.suffix.lower()
             if extension == ".zip":
                 results.extend(_scan_zip(path, allowed_extensions))
+            elif extension in {".rar", ".7z"}:
+                results.extend(_scan_7z_archive(path, allowed_extensions, archive_tool_path))
             elif extension in _UNVERIFIED_EXTENSIONS:
                 resolved_chdman = _find_chdman(chdman_path)
                 if extension == ".chd" and resolved_chdman:
