@@ -23,9 +23,13 @@ TRANSLATIONS = {
         "settings": "Configuración",
         "bios_folder": "Elegir carpeta de BIOS…",
         "auto_bios": "Detectar BIOS automáticamente",
+        "scan_workers": "Hilos de escaneo",
+        "workers_auto": "Automático (hasta 4)",
+        "dark_mode": "Modo oscuro",
         "language": "Idioma",
         "help": "Ayuda",
         "about": "Acerca de Romoteca",
+        "dat_websites": "Webs de bases DAT",
         "collections": "Colecciones",
         "name": "Nombre",
         "have": "Tengo",
@@ -84,9 +88,13 @@ TRANSLATIONS = {
         "settings": "Settings",
         "bios_folder": "Choose BIOS folder…",
         "auto_bios": "Detect BIOS automatically",
+        "scan_workers": "Scan workers",
+        "workers_auto": "Automatic (up to 4)",
+        "dark_mode": "Dark mode",
         "language": "Language",
         "help": "Help",
         "about": "About Romoteca",
+        "dat_websites": "DAT database websites",
         "collections": "Collections",
         "name": "Name",
         "have": "Have",
@@ -124,6 +132,56 @@ TRANSLATIONS = {
         "report_saved": "Report saved to {path}",
         "about_text": "Romoteca {version}\n\nSafe, read-only ROM inventory.\n\nOpen source software released under the MIT License.\nCreated by Davilah77.",
     },
+}
+
+# The complete vocabulary falls back to English while each language is being
+# completed, so no menu becomes unusable when switching languages.
+TRANSLATIONS["fr"] = {
+    **TRANSLATIONS["en"],
+    "app_subtitle": "Inventaire sûr des collections",
+    "file": "Fichier", "settings": "Paramètres", "language": "Langue", "help": "Aide",
+    "import_dat": "Importer un DAT…", "download_online": "Télécharger un DAT en ligne…",
+    "select_roms": "Choisir le dossier ROM…", "scan": "Analyser", "export": "Exporter CSV…",
+    "exit": "Quitter", "collections": "Collections", "name": "Nom", "have": "Possédés",
+    "collection": "Collection", "show": "Afficher :", "all": "Tous", "status": "État",
+    "game": "Jeu", "detail": "Détails", "legend": "Légende :", "complete": "Complet",
+    "partial": "Incomplet", "missing": "Manquant", "unknown": "Non reconnu", "clone": "Clone",
+    "scan_workers": "Threads d’analyse", "workers_auto": "Automatique (jusqu’à 4)",
+    "dark_mode": "Mode sombre", "dat_websites": "Sites de bases DAT",
+}
+TRANSLATIONS["de"] = {
+    **TRANSLATIONS["en"],
+    "app_subtitle": "Sicheres Sammlungsinventar", "file": "Datei", "settings": "Einstellungen",
+    "language": "Sprache", "help": "Hilfe", "import_dat": "DAT importieren…",
+    "download_online": "DAT online herunterladen…", "select_roms": "ROM-Ordner auswählen…",
+    "scan": "Scannen", "export": "CSV exportieren…", "exit": "Beenden", "collections": "Sammlungen",
+    "name": "Name", "have": "Vorhanden", "collection": "Sammlung", "show": "Anzeigen:",
+    "all": "Alle", "status": "Status", "game": "Spiel", "detail": "Details", "legend": "Legende:",
+    "complete": "Vollständig", "partial": "Unvollständig", "missing": "Fehlt", "unknown": "Unbekannt",
+    "clone": "Klon", "scan_workers": "Scan-Threads", "workers_auto": "Automatisch (bis 4)",
+    "dark_mode": "Dunkler Modus", "dat_websites": "DAT-Datenbank-Websites",
+}
+TRANSLATIONS["nl"] = {
+    **TRANSLATIONS["en"],
+    "app_subtitle": "Veilige collectie-inventaris", "file": "Bestand", "settings": "Instellingen",
+    "language": "Taal", "help": "Help", "import_dat": "DAT importeren…", "download_online": "DAT online downloaden…",
+    "select_roms": "ROM-map kiezen…", "scan": "Scannen", "export": "CSV exporteren…", "exit": "Afsluiten",
+    "collections": "Collecties", "name": "Naam", "have": "Bezit", "collection": "Collectie",
+    "show": "Tonen:", "all": "Alle", "status": "Status", "game": "Spel", "detail": "Details",
+    "legend": "Legenda:", "complete": "Compleet", "partial": "Onvolledig", "missing": "Ontbreekt",
+    "unknown": "Onbekend", "clone": "Kloon", "scan_workers": "Scan-threads",
+    "workers_auto": "Automatisch (maximaal 4)", "dark_mode": "Donkere modus", "dat_websites": "DAT-databases",
+}
+TRANSLATIONS["ru"] = {
+    **TRANSLATIONS["en"],
+    "app_subtitle": "Безопасный инвентарь коллекций", "file": "Файл", "settings": "Настройки",
+    "language": "Язык", "help": "Справка", "import_dat": "Импорт DAT…", "download_online": "Скачать DAT онлайн…",
+    "select_roms": "Выбрать папку ROM…", "scan": "Сканировать", "export": "Экспорт CSV…", "exit": "Выход",
+    "collections": "Коллекции", "name": "Название", "have": "Есть", "collection": "Коллекция",
+    "show": "Показать:", "all": "Все", "status": "Статус", "game": "Игра", "detail": "Подробности",
+    "legend": "Обозначения:", "complete": "Полная", "partial": "Неполная", "missing": "Отсутствует",
+    "unknown": "Не распознано", "clone": "Клон", "scan_workers": "Потоки сканирования",
+    "workers_auto": "Автоматически (до 4)", "dark_mode": "Тёмная тема", "dat_websites": "Сайты DAT-баз",
 }
 
 

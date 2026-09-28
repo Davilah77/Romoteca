@@ -6,6 +6,7 @@ import shutil
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -50,6 +51,8 @@ class RomotecaApp(tk.Tk):
         self.settings = load_settings()
         self.language = self.settings.get("language", "en")
         self.tr = Translator(self.language)
+        self.dark_mode = bool(self.settings.get("dark_mode", False))
+        self.scan_workers = self.settings.get("scan_workers", "auto")
         self.collections: dict[str, CollectionSession] = {}
         self.current_key: str | None = None
         self.events: queue.Queue[tuple] = queue.Queue()
@@ -82,8 +85,25 @@ class RomotecaApp(tk.Tk):
 
     def _configure_style(self) -> None:
         style = ttk.Style(self)
-        if "vista" in style.theme_names():
+        if self.dark_mode and "clam" in style.theme_names():
+            style.theme_use("clam")
+        elif "vista" in style.theme_names():
             style.theme_use("vista")
+        if self.dark_mode:
+            background, foreground, field = "#202124", "#f1f3f4", "#303134"
+            self.configure(background=background)
+            style.configure(".", background=background, foreground=foreground)
+            style.configure("TFrame", background=background)
+            style.configure("TLabel", background=background, foreground=foreground)
+            style.configure("TLabelframe", background=background, foreground=foreground)
+            style.configure("TLabelframe.Label", background=background, foreground=foreground)
+            style.configure("TButton", background=field, foreground=foreground)
+            style.configure("TEntry", fieldbackground=field, foreground=foreground)
+            style.configure("TCombobox", fieldbackground=field, foreground=foreground)
+            style.configure("Treeview", background=field, fieldbackground=field, foreground=foreground)
+            style.map("Treeview", background=[("selected", "#245a9a")], foreground=[("selected", "#ffffff")])
+        else:
+            self.configure(background="#f0f0f0")
         style.configure("Title.TLabel", font=("Segoe UI", 16, "bold"))
         style.configure("Muted.TLabel", foreground="#5b6470")
         style.configure("Treeview", rowheight=27, font=("Segoe UI", 10))
@@ -236,17 +256,53 @@ class RomotecaApp(tk.Tk):
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
         settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
+        workers_menu = tk.Menu(settings_menu, tearoff=False)
+        self.scan_workers_var = tk.StringVar(value=str(self.scan_workers))
+        for value, label in (("auto", self.tr("workers_auto")), ("2", "2"), ("4", "4"), ("8", "8"), ("12", "12")):
+            workers_menu.add_radiobutton(label=label, value=value, variable=self.scan_workers_var, command=self._set_scan_workers)
+        settings_menu.add_cascade(label=self.tr("scan_workers"), menu=workers_menu)
+        self.dark_mode_var = tk.BooleanVar(value=self.dark_mode)
+        settings_menu.add_checkbutton(label=self.tr("dark_mode"), variable=self.dark_mode_var, command=self._toggle_dark_mode)
         self.menu_bar.add_cascade(label=self.tr("settings"), menu=settings_menu)
 
         language_menu = tk.Menu(self.menu_bar, tearoff=False)
         self.language_var = tk.StringVar(value=self.language)
         language_menu.add_radiobutton(label="English", value="en", variable=self.language_var, command=lambda: self._change_language("en"))
         language_menu.add_radiobutton(label="Español", value="es", variable=self.language_var, command=lambda: self._change_language("es"))
+        language_menu.add_radiobutton(label="Français", value="fr", variable=self.language_var, command=lambda: self._change_language("fr"))
+        language_menu.add_radiobutton(label="Deutsch", value="de", variable=self.language_var, command=lambda: self._change_language("de"))
+        language_menu.add_radiobutton(label="Nederlands", value="nl", variable=self.language_var, command=lambda: self._change_language("nl"))
+        language_menu.add_radiobutton(label="Русский", value="ru", variable=self.language_var, command=lambda: self._change_language("ru"))
         self.menu_bar.add_cascade(label=self.tr("language"), menu=language_menu)
 
         help_menu = tk.Menu(self.menu_bar, tearoff=False)
         help_menu.add_command(label=self.tr("about"), command=self._show_about)
+        sites_menu = tk.Menu(help_menu, tearoff=False)
+        for key, url in self._dat_websites():
+            sites_menu.add_command(label=key, command=lambda target=url: webbrowser.open(target))
+        help_menu.add_cascade(label=self.tr("dat_websites"), menu=sites_menu)
         self.menu_bar.add_cascade(label=self.tr("help"), menu=help_menu)
+
+    @staticmethod
+    def _dat_websites() -> tuple[tuple[str, str], ...]:
+        return (
+            ("Datomatic / No-Intro", "https://datomatic.no-intro.org/"),
+            ("Redump", "https://redump.info/downloads"),
+            ("TOSEC", "https://www.tosecdev.org/"),
+        )
+
+    def _set_scan_workers(self) -> None:
+        self.scan_workers = self.scan_workers_var.get()
+        self.settings["scan_workers"] = self.scan_workers
+        save_settings(self.settings)
+
+    def _toggle_dark_mode(self) -> None:
+        self.dark_mode = bool(self.dark_mode_var.get())
+        self.settings["dark_mode"] = self.dark_mode
+        save_settings(self.settings)
+        self._configure_style()
+        self._create_icons()
+        self._translate_ui()
 
     def _translate_ui(self) -> None:
         self._build_menu()
@@ -592,11 +648,12 @@ class RomotecaApp(tk.Tk):
     def _scan_worker(self, key: str) -> None:
         session = self.collections[key]
         assert session.rom_folder
+        workers = None if self.scan_workers == "auto" else int(self.scan_workers)
         def progress(current: int, total: int, name: str) -> None:
             self.events.put(("progress", current, total, name))
         try:
             allowed_extensions = self._catalog_extensions(session.catalog)
-            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions)
+            rom_scanned = scan_folder(session.rom_folder, progress=progress, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers)
             scanned = list(rom_scanned)
             needs_bios = any(
                 "[bios]" in (game.name + " " + game.description).lower()
@@ -604,7 +661,7 @@ class RomotecaApp(tk.Tk):
             )
             bios = self._effective_bios_folder(session.rom_folder) if needs_bios else None
             if bios and bios.resolve() != session.rom_folder.resolve():
-                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions))
+                scanned.extend(scan_folder(bios, cancelled=self.cancel_event.is_set, allowed_extensions=allowed_extensions, workers=workers))
             results, summary = compare_catalog(session.catalog, scanned)
             # BIOS files belonging to other systems should not appear as unknown ROMs.
             unknown = find_unknown_files(results, rom_scanned)

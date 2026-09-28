@@ -21,6 +21,8 @@ incomplete or missing without altering the collection.
 - Local DAT library. Third-party DAT files are not bundled.
 - Optional online DAT discovery from official Redump HTTPS downloads.
 - Community DAT Catalog support through HTTPS RAW files hosted on GitHub.
+- Configurable scan workers, light/dark theme and multilingual interface.
+- Direct links to the official DAT database websites.
 
 Romoteca is open-source software released under the MIT License.
 
@@ -39,3 +41,13 @@ powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
 ```
 
 The executable is created at `dist\Romoteca.exe`.
+
+## Linux
+
+Build a portable Linux binary with:
+
+```bash
+bash build_linux.sh
+```
+
+The resulting `dist/Romoteca-linux-x86_64.tar.gz` contains the executable. GitHub Actions also builds this asset automatically for tagged releases.

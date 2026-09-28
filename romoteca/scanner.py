@@ -74,6 +74,7 @@ def scan_folder(
     progress: ProgressCallback | None = None,
     cancelled: Callable[[], bool] | None = None,
     allowed_extensions: set[str] | None = None,
+    workers: int | None = None,
 ) -> list[ScannedFile]:
     root = Path(folder)
     is_cancelled = cancelled or (lambda: False)
@@ -87,8 +88,9 @@ def scan_folder(
     ]
     results: list[ScannedFile] = []
     hash_paths = [path for path in paths if path.suffix.lower() not in {".zip", *_UNVERIFIED_EXTENSIONS}]
-    workers = min(4, max(1, os.cpu_count() or 1))
-    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="romoteca-hash") if hash_paths else None
+    worker_count = workers if workers is not None else min(4, max(1, os.cpu_count() or 1))
+    worker_count = max(1, min(32, int(worker_count)))
+    executor = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="romoteca-hash") if hash_paths else None
     futures = {path: executor.submit(_scan_hashed_file, path, is_cancelled) for path in hash_paths} if executor else {}
     try:
         for index, path in enumerate(paths, start=1):
