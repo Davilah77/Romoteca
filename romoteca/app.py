@@ -338,18 +338,29 @@ class RomotecaApp(tk.Tk):
         menu_background = "#202124" if self.dark_mode else "#f0f0f0"
         menu_foreground = "#f1f3f4" if self.dark_mode else "#202124"
         self.top_menu_frame.configure(background=menu_background)
+        self._posted_menu = None
+        self._menu_buttons = []
+
+        def new_menu(master: tk.Misc) -> tk.Menu:
+            return tk.Menu(master, tearoff=False, background="#202124" if self.dark_mode else "#f0f0f0", foreground="#f1f3f4" if self.dark_mode else "#202124", activebackground="#4b5563" if self.dark_mode else "#d9d9d9", activeforeground="#ffffff" if self.dark_mode else "#202124", selectcolor="#f1f3f4" if self.dark_mode else "#202124")
 
         def add_menu_button(label: str, menu: tk.Menu) -> None:
             button = tk.Button(self.top_menu_frame, text=label, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground, highlightthickness=0)
             button.pack(side="left")
             def show_menu() -> None:
+                if self._posted_menu is not None and self._posted_menu is not menu:
+                    self._posted_menu.unpost()
                 try:
                     menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+                    self._posted_menu = menu
                 finally:
                     menu.grab_release()
             button.configure(command=show_menu)
+            button.bind("<Enter>", lambda _event: show_menu() if self._posted_menu is not None and self._posted_menu is not menu else None)
+            button.bind("<Leave>", lambda _event: button.configure(background=menu_background))
+            self._menu_buttons.append(button)
 
-        file_menu = tk.Menu(self, tearoff=False)
+        file_menu = new_menu(self)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
         file_menu.add_command(label=self.tr("download_online"), command=self._download_online_dat)
         file_menu.add_command(label=self.tr("select_roms"), command=self._choose_rom_folder)
@@ -360,16 +371,16 @@ class RomotecaApp(tk.Tk):
         file_menu.add_command(label=self.tr("exit"), command=self.destroy)
         add_menu_button(self.tr("file"), file_menu)
 
-        settings_menu = tk.Menu(self, tearoff=False)
+        settings_menu = new_menu(self)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
         settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
-        workers_menu = tk.Menu(settings_menu, tearoff=False)
+        workers_menu = new_menu(settings_menu)
         self.scan_workers_var = tk.StringVar(value=str(self.scan_workers))
         for value, label in (("auto", self.tr("workers_auto")), ("2", "2"), ("4", "4"), ("8", "8"), ("12", "12")):
             workers_menu.add_radiobutton(label=label, value=value, variable=self.scan_workers_var, command=self._set_scan_workers)
         settings_menu.add_cascade(label=self.tr("scan_workers"), menu=workers_menu)
-        theme_menu = tk.Menu(settings_menu, tearoff=False)
+        theme_menu = new_menu(settings_menu)
         self.theme_var = tk.StringVar(value=self.theme_mode)
         for value, label in (("system", self.tr("theme_system")), ("light", self.tr("theme_light")), ("dark", self.tr("theme_dark"))):
             theme_menu.add_radiobutton(label=label, value=value, variable=self.theme_var, command=self._set_theme)
@@ -379,7 +390,7 @@ class RomotecaApp(tk.Tk):
         settings_menu.add_command(label=self.tr("check_updates"), command=self._check_for_updates)
         add_menu_button(self.tr("settings"), settings_menu)
 
-        language_menu = tk.Menu(self, tearoff=False)
+        language_menu = new_menu(self)
         self.language_var = tk.StringVar(value=self.language)
         language_menu.add_radiobutton(label="English", value="en", variable=self.language_var, command=lambda: self._change_language("en"))
         language_menu.add_radiobutton(label="Español", value="es", variable=self.language_var, command=lambda: self._change_language("es"))
@@ -389,9 +400,9 @@ class RomotecaApp(tk.Tk):
         language_menu.add_radiobutton(label="Русский", value="ru", variable=self.language_var, command=lambda: self._change_language("ru"))
         add_menu_button(self.tr("language"), language_menu)
 
-        help_menu = tk.Menu(self, tearoff=False)
+        help_menu = new_menu(self)
         help_menu.add_command(label=self.tr("about"), command=self._show_about)
-        sites_menu = tk.Menu(help_menu, tearoff=False)
+        sites_menu = new_menu(help_menu)
         for key, url in self._dat_websites():
             sites_menu.add_command(label=key, command=lambda target=url: webbrowser.open(target))
         help_menu.add_cascade(label=self.tr("dat_websites"), menu=sites_menu)
@@ -481,6 +492,14 @@ class RomotecaApp(tk.Tk):
                 self.events.put(("update_error", str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _version_tuple(value: str) -> tuple[int, ...]:
+        numbers = []
+        for part in value.lstrip("v").split("."):
+            digits = "".join(character for character in part if character.isdigit())
+            numbers.append(int(digits or 0))
+        return tuple(numbers or [0])
 
     def _download_and_install_update(self, asset: dict, release_url: str) -> None:
         if not getattr(sys, "frozen", False):
@@ -859,7 +878,7 @@ class RomotecaApp(tk.Tk):
                     self.status_var.set(self.tr("scan_failed"))
                 elif event[0] == "update_available":
                     latest, asset, release_url = event[1], event[2], event[3]
-                    if not latest or latest == __version__ or not asset:
+                    if not latest or self._version_tuple(latest) <= self._version_tuple(__version__) or not asset:
                         self.status_var.set(self.tr("updates_current"))
                     elif messagebox.askyesno(self.tr("update_available_title"), self.tr("update_available", version=latest), parent=self):
                         self.status_var.set(self.tr("updating"))
