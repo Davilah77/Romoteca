@@ -358,8 +358,11 @@ class RomotecaApp(tk.Tk):
                     return
                 if self._posted_menu is not None and self._posted_menu is not menu:
                     self._posted_menu.unpost()
-                menu.post(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
-                self._posted_menu = menu
+                try:
+                    menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+                    self._posted_menu = menu
+                finally:
+                    menu.grab_release()
             button.configure(command=show_menu)
             button.bind("<Enter>", lambda _event: (button.configure(background="#3c4043" if self.dark_mode else "#d9d9d9"), show_menu() if self._posted_menu is not None and self._posted_menu is not menu else None))
             button.bind("<Leave>", lambda _event: button.configure(background=menu_background))
