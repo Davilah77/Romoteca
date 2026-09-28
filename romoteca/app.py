@@ -342,7 +342,9 @@ class RomotecaApp(tk.Tk):
         self._menu_buttons = []
 
         def new_menu(master: tk.Misc) -> tk.Menu:
-            return tk.Menu(master, tearoff=False, background="#202124" if self.dark_mode else "#f0f0f0", foreground="#f1f3f4" if self.dark_mode else "#202124", activebackground="#4b5563" if self.dark_mode else "#d9d9d9", activeforeground="#ffffff" if self.dark_mode else "#202124", selectcolor="#f1f3f4" if self.dark_mode else "#202124")
+            menu = tk.Menu(master, tearoff=False, background="#202124" if self.dark_mode else "#f0f0f0", foreground="#f1f3f4" if self.dark_mode else "#202124", activebackground="#4b5563" if self.dark_mode else "#d9d9d9", activeforeground="#ffffff" if self.dark_mode else "#202124", selectcolor="#f1f3f4" if self.dark_mode else "#202124")
+            menu.bind("<ButtonRelease-1>", lambda _event: self.after_idle(self._close_posted_menu), add="+")
+            return menu
 
         def add_menu_button(label: str, menu: tk.Menu) -> None:
             button = tk.Button(self.top_menu_frame, text=label, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground, highlightthickness=0)
@@ -350,13 +352,10 @@ class RomotecaApp(tk.Tk):
             def show_menu() -> None:
                 if self._posted_menu is not None and self._posted_menu is not menu:
                     self._posted_menu.unpost()
-                try:
-                    menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
-                    self._posted_menu = menu
-                finally:
-                    menu.grab_release()
+                menu.post(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+                self._posted_menu = menu
             button.configure(command=show_menu)
-            button.bind("<Enter>", lambda _event: show_menu() if self._posted_menu is not None and self._posted_menu is not menu else None)
+            button.bind("<Enter>", lambda _event: (button.configure(background="#3c4043" if self.dark_mode else "#d9d9d9"), show_menu() if self._posted_menu is not None and self._posted_menu is not menu else None))
             button.bind("<Leave>", lambda _event: button.configure(background=menu_background))
             self._menu_buttons.append(button)
 
@@ -407,6 +406,11 @@ class RomotecaApp(tk.Tk):
             sites_menu.add_command(label=key, command=lambda target=url: webbrowser.open(target))
         help_menu.add_cascade(label=self.tr("dat_websites"), menu=sites_menu)
         add_menu_button(self.tr("help"), help_menu)
+
+    def _close_posted_menu(self) -> None:
+        if self._posted_menu is not None:
+            self._posted_menu.unpost()
+            self._posted_menu = None
 
     @staticmethod
     def _dat_websites() -> tuple[tuple[str, str], ...]:
