@@ -205,7 +205,6 @@ class RomotecaApp(tk.Tk):
         menu_background = "#202124" if self.dark_mode else "#f0f0f0"
         self.top_menu_frame = tk.Frame(self, background=menu_background, height=30)
         self.top_menu_frame.pack(fill="x", side="top")
-        self.bind_all("<Motion>", self._menu_motion, add="+")
         root = ttk.Frame(self, padding=(14, 10, 14, 0))
         root.pack(fill="both", expand=True)
 
@@ -340,10 +339,7 @@ class RomotecaApp(tk.Tk):
         menu_foreground = "#f1f3f4" if self.dark_mode else "#202124"
         self.top_menu_frame.configure(background=menu_background)
         self._posted_menu = None
-        self._menu_active = False
-        self._menu_clicked = False
         self._menu_buttons = []
-        self._menu_button_menus = {}
 
         def new_menu(master: tk.Misc) -> tk.Menu:
             menu = tk.Menu(master, tearoff=False, background="#202124" if self.dark_mode else "#f0f0f0", foreground="#f1f3f4" if self.dark_mode else "#202124", activebackground="#4b5563" if self.dark_mode else "#d9d9d9", activeforeground="#ffffff" if self.dark_mode else "#202124", selectcolor="#f1f3f4" if self.dark_mode else "#202124")
@@ -353,11 +349,7 @@ class RomotecaApp(tk.Tk):
         def add_menu_button(label: str, menu: tk.Menu) -> None:
             button = tk.Button(self.top_menu_frame, text=label, relief="flat", bd=0, padx=8, pady=5, background=menu_background, foreground=menu_foreground, activebackground="#3c4043" if self.dark_mode else "#d9d9d9", activeforeground=menu_foreground, highlightthickness=0)
             button.pack(side="left")
-            def show_menu(from_hover: bool = False) -> None:
-                if from_hover and not self._menu_clicked:
-                    return
-                if not from_hover:
-                    self._menu_clicked = True
+            def show_menu() -> None:
                 if self._posted_menu is menu:
                     self._close_posted_menu()
                     return
@@ -366,14 +358,10 @@ class RomotecaApp(tk.Tk):
                 try:
                     menu.tk_popup(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
                     self._posted_menu = menu
-                    self._menu_active = True
                 finally:
                     menu.grab_release()
             button.configure(command=show_menu)
-            button.bind("<Enter>", lambda _event: (button.configure(background="#3c4043" if self.dark_mode else "#d9d9d9"), show_menu(True) if self._menu_active and self._posted_menu is not None and self._posted_menu is not menu else None))
-            button.bind("<Leave>", lambda _event: button.configure(background=menu_background))
             self._menu_buttons.append(button)
-            self._menu_button_menus[button] = menu
 
         file_menu = new_menu(self)
         file_menu.add_command(label=self.tr("import_dat"), command=self._import_dat)
@@ -427,21 +415,6 @@ class RomotecaApp(tk.Tk):
         if self._posted_menu is not None:
             self._posted_menu.unpost()
             self._posted_menu = None
-        self._menu_active = False
-        self._menu_clicked = False
-
-    def _menu_motion(self, event: tk.Event) -> None:
-        """Switch menus while moving across the menu bar, after a click opened one."""
-        if not self._menu_active or self._posted_menu is None:
-            return
-        for button, menu in self._menu_button_menus.items():
-            left = button.winfo_rootx()
-            top = button.winfo_rooty()
-            if left <= event.x_root < left + button.winfo_width() and top <= event.y_root < top + button.winfo_height():
-                if menu is not self._posted_menu:
-                    button.invoke()
-                return
-
 
     @staticmethod
     def _dat_websites() -> tuple[tuple[str, str], ...]:
