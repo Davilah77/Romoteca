@@ -26,6 +26,10 @@ incomplete or missing without altering the collection.
 
 Romoteca is open-source software released under the MIT License.
 
+## Acknowledgements
+
+Romoteca gratefully acknowledges the preservation work of [Redump](https://redump.info/), [No-Intro](https://www.no-intro.org/) and [TOSEC](https://www.tosecdev.org/). Their databases and DAT files are maintained by their respective communities and are not bundled with Romoteca. Please consult each project's own terms when downloading or using their data.
+
 ## Run from source
 
 Python 3.11 or later is required.

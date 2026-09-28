@@ -77,7 +77,7 @@ TRANSLATIONS = {
         "scan_error": "Error durante el escaneo",
         "scan_failed": "No se pudo completar el escaneo.",
         "report_saved": "Informe guardado en {path}",
-        "about_text": "Romoteca {version}\n\nInventario de ROMs seguro y de solo lectura.\n\nCódigo abierto bajo licencia MIT.\nCreado por Davilah77.",
+        "about_text": "Romoteca {version}\n\nInventario de ROMs seguro y de solo lectura.\n\nCódigo abierto bajo licencia MIT.\nCreado por Davilah77.\n\nAgradecimientos:\nRedump, No-Intro y TOSEC por su trabajo de preservación y por los datos que hacen posibles estas comprobaciones.",
     },
     "en": {
         "app_subtitle": "Safe collection inventory",
@@ -154,7 +154,7 @@ TRANSLATIONS = {
         "scan_error": "Scan error",
         "scan_failed": "The scan could not be completed.",
         "report_saved": "Report saved to {path}",
-        "about_text": "Romoteca {version}\n\nSafe, read-only ROM inventory.\n\nOpen source software released under the MIT License.\nCreated by Davilah77.",
+        "about_text": "Romoteca {version}\n\nSafe, read-only ROM inventory.\n\nOpen source software released under the MIT License.\nCreated by Davilah77.\n\nAcknowledgements:\nThanks to Redump, No-Intro and TOSEC for their preservation work and the data that makes these checks possible.",
     },
 }
 
