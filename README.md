@@ -47,6 +47,10 @@ CHD verification does not change, rename or delete any ROM. A CHD that is health
 - Added native Windows title-bar colour refresh when switching themes.
 - Expanded documentation and preservation-project acknowledgements.
 
+## Release 0.4.3.1
+
+- Fixed the Windows self-updater so it waits for the running executable to close completely before replacing and restarting it. This prevents PyInstaller `Python DLL` errors during updates.
+
 ## Acknowledgements
 
 Romoteca gratefully acknowledges the preservation work of [Redump](https://redump.info/), [No-Intro](https://www.no-intro.org/) and [TOSEC](https://www.tosecdev.org/). Their databases and DAT files are maintained by their respective communities and are not bundled with Romoteca. Please consult each project's own terms when downloading or using their data.

@@ -555,7 +555,20 @@ class RomotecaApp(tk.Tk):
                 if actual != expected:
                     raise ValueError("Downloaded update checksum does not match")
             script = temporary.with_suffix(".cmd")
-            script.write_text(f'@echo off\r\ntimeout /t 2 /nobreak >nul\r\ncopy /y "{temporary}" "{target}" >nul\r\nstart "" "{target}"\r\ndel "%~f0"\r\n', encoding="utf-8")
+            # Wait for this process to exit before replacing the one-file
+            # executable. PyInstaller keeps its extracted MEI directory alive
+            # until shutdown, so a fixed short timeout is not reliable.
+            script.write_text(
+                f'@echo off\r\n'
+                f'set "ROMOTECA_PID={os.getpid()}"\r\n'
+                f':wait_for_exit\r\n'
+                f'tasklist /FI "PID eq %ROMOTECA_PID%" 2>NUL | findstr /I " %ROMOTECA_PID% " >NUL\r\n'
+                f'if not errorlevel 1 (timeout /t 1 /nobreak >NUL & goto wait_for_exit)\r\n'
+                f'copy /Y "{temporary}" "{target}" >NUL\r\n'
+                f'start "" "{target}"\r\n'
+                f'del "%~f0"\r\n',
+                encoding="utf-8",
+            )
             subprocess.Popen(["cmd", "/c", str(script)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             self.destroy()
         except Exception as exc:
