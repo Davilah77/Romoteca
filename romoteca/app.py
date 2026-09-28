@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import logging
 import os
 import queue
 import shutil
@@ -14,8 +15,10 @@ import tkinter as tk
 import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from logging.handlers import RotatingFileHandler
 
 from . import __version__
 from .dat_parser import DatError, load_dat
@@ -55,11 +58,16 @@ class RomotecaApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.settings = load_settings()
+        self.app_directory = application_directory()
+        self.logs_directory = self.app_directory / "logs"
+        self.backups_directory = self.app_directory / "backups"
+        self.logger = self._configure_logging()
         self.language = self.settings.get("language", "en")
         self.tr = Translator(self.language)
         self.theme_mode = self.settings.get("theme_mode", "system")
         self.dark_mode = self._theme_is_dark(self.theme_mode)
         self.scan_workers = self.settings.get("scan_workers", "auto")
+        self.read_only_mode = bool(self.settings.get("read_only_mode", True))
         self.chdman_path = self.settings.get("chdman_path")
         self.collections: dict[str, CollectionSession] = {}
         self.current_key: str | None = None
@@ -70,6 +78,9 @@ class RomotecaApp(tk.Tk):
         self.manual_bios_folder = Path(stored_bios) if stored_bios else None
         self.dats_directory = application_directory() / "dats"
         self.dats_directory.mkdir(parents=True, exist_ok=True)
+        self.backups_directory.mkdir(parents=True, exist_ok=True)
+        self._backup_settings("startup")
+        self.logger.info("Romoteca started; version=%s; read_only=%s", __version__, self.read_only_mode)
 
         self.title(f"Romoteca {__version__}")
         icon = resource_path("packaging/Romoteca.ico")
@@ -88,6 +99,72 @@ class RomotecaApp(tk.Tk):
         self._restore_layout()
         self.protocol("WM_DELETE_WINDOW", self._close_app)
         self.after(100, self._process_events)
+
+    def _configure_logging(self) -> logging.Logger:
+        logger = logging.getLogger("romoteca")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if logger.handlers:
+            return logger
+        try:
+            self.logs_directory.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                self.logs_directory / "romoteca.log",
+                maxBytes=2 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            )
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            logger.addHandler(handler)
+        except OSError:
+            logger.addHandler(logging.NullHandler())
+        return logger
+
+    def _backup_settings(self, reason: str) -> Path | None:
+        if not self.settings:
+            return None
+        try:
+            self.backups_directory.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            destination = self.backups_directory / f"settings-{stamp}-{reason}.json"
+            destination.write_text(json.dumps(self.settings, ensure_ascii=False, indent=2), encoding="utf-8")
+            snapshots = sorted(self.backups_directory.glob("settings-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+            for old in snapshots[20:]:
+                old.unlink(missing_ok=True)
+            self.logger.info("Settings backup created: %s", destination)
+            return destination
+        except (OSError, TypeError, ValueError) as exc:
+            self.logger.warning("Could not create settings backup: %s", exc)
+            return None
+
+    def _backup_configuration(self) -> None:
+        if self._backup_settings("manual"):
+            self.status_var.set(self.tr("backup_created"))
+        else:
+            messagebox.showerror(self.tr("backup_error_title"), self.tr("backup_failed"), parent=self)
+
+    def _restore_configuration(self) -> None:
+        selected = filedialog.askopenfilename(
+            title=self.tr("restore_settings"),
+            initialdir=str(self.backups_directory),
+            filetypes=(("JSON", "*.json"), ("All files", "*.*")),
+        )
+        if not selected:
+            return
+        try:
+            restored = json.loads(Path(selected).read_text(encoding="utf-8"))
+            if not isinstance(restored, dict):
+                raise ValueError("The backup does not contain a settings object")
+            if not messagebox.askyesno(self.tr("restore_settings"), self.tr("restore_confirm"), parent=self):
+                return
+            self._backup_settings("before-restore")
+            self.settings = restored
+            save_settings(self.settings)
+            self.logger.info("Settings restored from: %s", selected)
+            messagebox.showinfo(self.tr("restore_settings"), self.tr("restore_restart"), parent=self)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self.logger.exception("Could not restore settings from %s", selected)
+            messagebox.showerror(self.tr("backup_error_title"), str(exc), parent=self)
 
     @staticmethod
     def _system_prefers_dark() -> bool:
@@ -149,6 +226,7 @@ class RomotecaApp(tk.Tk):
         except tk.TclError:
             pass
         save_settings(self.settings)
+        self.logger.info("Romoteca closed")
         self.destroy()
 
     def _restore_layout(self) -> None:
@@ -406,6 +484,8 @@ class RomotecaApp(tk.Tk):
         settings_menu = new_menu(self)
         settings_menu.add_command(label=self.tr("bios_folder"), command=self._choose_bios_folder)
         settings_menu.add_command(label=self.tr("chdman_path"), command=self._choose_chdman)
+        self.read_only_var = tk.BooleanVar(value=self.read_only_mode)
+        settings_menu.add_checkbutton(label=self.tr("read_only_mode"), variable=self.read_only_var, command=self._toggle_read_only)
         self.auto_bios_var = tk.BooleanVar(value=self.auto_bios)
         settings_menu.add_checkbutton(label=self.tr("auto_bios"), variable=self.auto_bios_var, command=self._toggle_auto_bios)
         workers_menu = new_menu(settings_menu)
@@ -419,6 +499,9 @@ class RomotecaApp(tk.Tk):
             theme_menu.add_radiobutton(label=label, value=value, variable=self.theme_var, command=self._set_theme)
         settings_menu.add_cascade(label=self.tr("theme"), menu=theme_menu)
         self.dark_mode_var = tk.BooleanVar(value=self.dark_mode)
+        settings_menu.add_separator()
+        settings_menu.add_command(label=self.tr("backup_settings"), command=self._backup_configuration)
+        settings_menu.add_command(label=self.tr("restore_settings"), command=self._restore_configuration)
         settings_menu.add_separator()
         settings_menu.add_command(label=self.tr("check_updates"), command=self._check_for_updates)
         add_menu_button(self.tr("settings"), settings_menu)
@@ -458,6 +541,16 @@ class RomotecaApp(tk.Tk):
         self.scan_workers = self.scan_workers_var.get()
         self.settings["scan_workers"] = self.scan_workers
         save_settings(self.settings)
+
+    def _toggle_read_only(self) -> None:
+        requested = bool(self.read_only_var.get())
+        if not requested and not messagebox.askyesno(self.tr("read_only_mode"), self.tr("write_mode_confirm"), parent=self):
+            self.read_only_var.set(True)
+            return
+        self.read_only_mode = requested
+        self.settings["read_only_mode"] = requested
+        save_settings(self.settings)
+        self.logger.info("Read-only mode changed: %s", requested)
 
     def _set_theme(self) -> None:
         self.theme_mode = self.theme_var.get()
@@ -547,6 +640,7 @@ class RomotecaApp(tk.Tk):
         target = Path(sys.executable).resolve()
         temporary = Path(tempfile.gettempdir()) / f"Romoteca.update.{os.getpid()}.exe"
         try:
+            self.logger.info("Downloading update: %s", asset.get("browser_download_url"))
             with urllib.request.urlopen(asset["browser_download_url"], timeout=60) as response:
                 temporary.write_bytes(response.read())
             expected = str(asset.get("digest", "")).removeprefix("sha256:").lower()
@@ -555,35 +649,65 @@ class RomotecaApp(tk.Tk):
                 if actual != expected:
                     raise ValueError("Downloaded update checksum does not match")
             script = temporary.with_suffix(".ps1")
-            # Wait for this process to exit before replacing the one-file
-            # executable. PyInstaller keeps its extracted MEI directory alive
-            # until shutdown, so a fixed short timeout is not reliable.
+            update_log = self.logs_directory / "updater.log"
+            # The helper waits for the old process, stages the replacement,
+            # verifies its hash, and restores the previous executable if the
+            # new PyInstaller process exits during startup.
             def _ps_quote(value: Path | str) -> str:
                 return "'" + str(value).replace("'", "''") + "'"
 
             script.write_text(
-                "$ErrorActionPreference = 'SilentlyContinue'\n"
+                "$ErrorActionPreference = 'Stop'\n"
                 f"$romotecaPid = {os.getpid()}\n"
                 f"$source = {_ps_quote(temporary)}\n"
                 f"$target = {_ps_quote(target)}\n"
+                f"$staged = {_ps_quote(target.with_name(target.stem + '.update' + target.suffix))}\n"
+                f"$backup = {_ps_quote(target.with_name(target.stem + '.previous' + target.suffix))}\n"
                 f"$script = {_ps_quote(script)}\n"
-                "while (Get-Process -Id $romotecaPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
-                "Start-Sleep -Milliseconds 500\n"
-                "$copied = $false\n"
-                "for ($attempt = 0; $attempt -lt 30 -and -not $copied; $attempt++) {\n"
-                "    try { Copy-Item -LiteralPath $source -Destination $target -Force -ErrorAction Stop; $copied = $true } catch { Start-Sleep -Seconds 1 }\n"
-                "}\n"
-                "if ($copied) { Start-Process -FilePath $target }\n"
-                "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue\n"
-                "Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n",
+                f"$log = {_ps_quote(update_log)}\n"
+                "function Write-UpdateLog($message) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }\n"
+                "try {\n"
+                "  Write-UpdateLog 'Updater started'\n"
+                "  while (Get-Process -Id $romotecaPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 500 }\n"
+                "  for ($attempt = 0; $attempt -lt 60; $attempt++) {\n"
+                "    try { $stream = [System.IO.File]::Open($target, 'Open', 'Read', 'None'); $stream.Close(); break } catch { if ($attempt -eq 59) { throw }; Start-Sleep -Milliseconds 500 }\n"
+                "  }\n"
+                "  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
+                "  Copy-Item -LiteralPath $source -Destination $staged -Force\n"
+                "  if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $staged -Algorithm SHA256).Hash) { throw 'Staged update checksum mismatch' }\n"
+                "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
+                "  Move-Item -LiteralPath $target -Destination $backup -Force\n"
+                "  Move-Item -LiteralPath $staged -Destination $target -Force\n"
+                "  Start-Sleep -Seconds 2\n"
+                "  $newProcess = Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) -PassThru\n"
+                "  Start-Sleep -Seconds 8\n"
+                "  if ($newProcess.HasExited) { throw ('Updated executable exited during startup with code ' + $newProcess.ExitCode) }\n"
+                "  Start-Sleep -Seconds 5\n"
+                "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n"
+                "  Write-UpdateLog 'Update completed successfully'\n"
+                "} catch {\n"
+                "  Write-UpdateLog ('Update failed: ' + $_.Exception.Message)\n"
+                "  try {\n"
+                "    if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue }\n"
+                "    if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $target -Force }\n"
+                "    if (Test-Path -LiteralPath $target) { Start-Process -FilePath $target -WorkingDirectory (Split-Path -Parent $target) }\n"
+                "  } catch { Write-UpdateLog ('Rollback failed: ' + $_.Exception.Message) }\n"
+                "  Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue\n"
+                "  Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue\n"
+                "}\n",
                 encoding="utf-8",
             )
             subprocess.Popen(
                 ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script)],
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            self.destroy()
+            self.logger.info("Updater helper started: %s", script)
+            self.after(0, self.destroy)
         except Exception as exc:
+            self.logger.exception("Could not prepare update")
             temporary.unlink(missing_ok=True)
             messagebox.showerror(self.tr("update_error_title"), str(exc), parent=self)
 
@@ -601,6 +725,7 @@ class RomotecaApp(tk.Tk):
         try:
             catalog = load_dat(path)
         except DatError as exc:
+            self.logger.warning("Invalid DAT %s: %s", path, exc)
             if show_errors:
                 messagebox.showerror(self.tr("dat_error"), str(exc), parent=self)
             return
@@ -625,6 +750,7 @@ class RomotecaApp(tk.Tk):
                 shutil.copy2(source, destination)
             self._add_catalog(destination)
         except OSError as exc:
+            self.logger.exception("Could not import DAT %s", source)
             messagebox.showerror(self.tr("dat_error"), str(exc), parent=self)
             return
         self.collection_tree.selection_set(destination.name)
@@ -684,6 +810,7 @@ class RomotecaApp(tk.Tk):
                     loaded = list_github_dats(selected.rsplit("· ", 1)[-1])
                 self.events.put(("online_loaded", loaded))
             except Exception as exc:
+                self.logger.exception("Could not load online DAT platform list")
                 self.events.put(("online_error", str(exc)))
 
         def reload_entries(_event=None) -> None:
@@ -708,6 +835,7 @@ class RomotecaApp(tk.Tk):
                     path = download_dat(entry, destination)
                     self.events.put(("online_complete", path, window))
                 except Exception as exc:
+                    self.logger.exception("Online DAT download failed")
                     self.events.put(("online_error", str(exc)))
             threading.Thread(target=worker, daemon=True).start()
 
@@ -894,6 +1022,7 @@ class RomotecaApp(tk.Tk):
         if not current or not current.rom_folder:
             return
         self.cancel_event.clear()
+        self.logger.info("Scan started: collection=%s folder=%s workers=%s", current.key, current.rom_folder, self.scan_workers)
         self._set_busy(True)
         self.status_var.set(self.tr("preparing"))
         threading.Thread(target=self._scan_worker, args=(current.key,), daemon=True).start()
@@ -918,10 +1047,13 @@ class RomotecaApp(tk.Tk):
             results, summary = compare_catalog(session.catalog, scanned)
             # BIOS files belonging to other systems should not appear as unknown ROMs.
             unknown = find_unknown_files(results, rom_scanned)
+            self.logger.info("Scan completed: collection=%s complete=%s partial=%s missing=%s unknown=%s", key, summary.complete, summary.partial, summary.missing, summary.unknown)
             self.events.put(("complete", key, results, summary, unknown))
         except ScanCancelled:
+            self.logger.info("Scan cancelled: collection=%s", key)
             self.events.put(("cancelled",))
         except Exception as exc:
+            self.logger.exception("Scan failed: collection=%s", key)
             self.events.put(("error", str(exc)))
 
     def _process_events(self) -> None:
@@ -948,6 +1080,7 @@ class RomotecaApp(tk.Tk):
                     self.status_var.set(self.tr("cancelled"))
                 elif event[0] == "error":
                     self._set_busy(False)
+                    self.logger.error("Scan error reported: %s", event[1])
                     messagebox.showerror(self.tr("scan_error"), event[1], parent=self)
                     self.status_var.set(self.tr("scan_failed"))
                 elif event[0] == "update_available":
@@ -961,6 +1094,7 @@ class RomotecaApp(tk.Tk):
                         self.status_var.set(self.tr("ready"))
                 elif event[0] == "update_error":
                     self.status_var.set(self.tr("updates_failed"))
+                    self.logger.error("Update check failed: %s", event[1])
                     messagebox.showerror(self.tr("update_error_title"), event[1], parent=self)
                 elif event[0] == "online_loaded":
                     window = getattr(self, "online_window", None)
@@ -986,6 +1120,7 @@ class RomotecaApp(tk.Tk):
                     self._activate_collection(path.name)
                     self.status_var.set(self.tr("online_saved", path=path.name))
                 elif event[0] == "online_error":
+                    self.logger.error("Online DAT error: %s", event[1])
                     window = getattr(self, "online_window", None)
                     if window and window.winfo_exists():
                         window.online_status_var.set(self.tr("online_failed"))

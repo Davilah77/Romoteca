@@ -9,6 +9,8 @@ dist/
 .vscode/
 settings.json
 *.log
+logs/*.log
+backups/*.json
 tmp*/
 dats/*.dat
 dats/*.xml

@@ -27,6 +27,9 @@ incomplete or missing without altering the collection.
 - Modified/translated file classification for common patch and translation markers.
 - Persistent CHD result cache that stores only metadata and hashes.
 - Light and dark themes, including the native Windows title bar.
+- Read-only mode enabled by default, with an explicit setting before any future file-changing action.
+- Local `logs` folder with scan, error and updater diagnostics.
+- Local `backups` folder with timestamped configuration snapshots and restore support.
 
 Romoteca is open-source software released under the MIT License.
 
@@ -54,6 +57,23 @@ CHD verification does not change, rename or delete any ROM. A CHD that is health
 ## Release 0.4.3.2
 
 - Replaced the updater's locale-sensitive process detection with a PowerShell PID wait and retry loop, preventing update races and temporary PyInstaller DLL errors on Windows.
+
+## Release 0.4.3.3
+
+- Added an explicit read-only safety mode enabled by default.
+- Added local scan, error and updater logs next to the application.
+- Added timestamped configuration backups and restore from the new `backups` folder.
+- Hardened the Windows updater with staged replacement, SHA-256 verification, automatic rollback and a startup health check.
+
+## Application data folders
+
+Romoteca keeps operational files easy to find next to the executable:
+
+- `dats`: imported and downloaded DAT catalogs.
+- `logs`: rotating scan, error and update logs.
+- `backups`: timestamped configuration backups. Restoring one keeps a backup of the current settings first.
+
+ROM folders and BIOS folders are only scanned. Romoteca does not move, rename or delete their files.
 
 ## Acknowledgements
 
